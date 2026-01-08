@@ -1,0 +1,390 @@
+{
+  "_comment": "Fidelity Level Configuration for MicroPrecisionGimbal Digital Twin",
+  "_description": "Defines parameter sets for different simulation fidelity levels, enabling scalable testing from rapid unit tests (L1) to full production validation (L4)",
+  "_aerospace_standard": "DO-178C Level B compliant - graduated testing approach",
+  
+  "fidelity_levels": {
+    "L1": {
+      "name": "Quick Test - Unit Validation",
+      "description": "Minimal fidelity for rapid unit testing and stability verification. Linear actuators, no noise, coarse timestep.",
+      "use_cases": [
+        "Unit test execution (< 5 seconds per test)",
+        "Rapid iteration during development",
+        "Basic stability verification",
+        "CI/CD quick checks"
+      ],
+      "parameters": {
+        "simulation": {
+          "dt": 0.01,
+          "duration": 10.0,
+          "integration_method": "euler"
+        },
+        "actuators": {
+          "coarse_gimbal": {
+            "model": "linear",
+            "time_constant": 0.05,
+            "friction": 0.0,
+            "backlash": 0.0,
+            "saturation_enabled": false
+          },
+          "fsm": {
+            "model": "ideal",
+            "bandwidth": 1000.0,
+            "damping": 0.707,
+            "nonlinearity": false
+          }
+        },
+        "sensors": {
+          "qpd": {
+            "noise_enabled": false,
+            "noise_std": 0.0,
+            "bias_enabled": false,
+            "quantization_enabled": false
+          },
+          "imu": {
+            "noise_enabled": false,
+            "gyro_noise_std": 0.0,
+            "accel_noise_std": 0.0
+          }
+        },
+        "disturbances": {
+          "base_motion": {
+            "enabled": false,
+            "amplitude": 0.0
+          },
+          "pointing_disturbance": {
+            "enabled": false,
+            "rms": 0.0
+          }
+        },
+        "estimator": {
+          "ekf_enabled": true,
+          "process_noise_scale": 1.0,
+          "measurement_noise_scale": 1.0
+        },
+        "controller": {
+          "gains": {
+            "coarse_kp": 50.0,
+            "coarse_kd": 10.0,
+            "fine_kp": 100.0,
+            "fine_ki": 5.0
+          },
+          "anti_windup_enabled": true,
+          "feedforward_enabled": false
+        },
+        "performance_thresholds": {
+          "rms_pointing_error_urad": 50.0,
+          "peak_pointing_error_urad": 200.0,
+          "fsm_saturation_percent_max": 10.0,
+          "stability_check_enabled": true
+        }
+      }
+    },
+    
+    "L2": {
+      "name": "Integration Test - Component Interaction",
+      "description": "Moderate fidelity for integration testing. Includes basic nonlinearities and low-level noise.",
+      "use_cases": [
+        "Integration test validation",
+        "Controller tuning",
+        "Basic disturbance rejection testing",
+        "Subsystem interaction verification"
+      ],
+      "parameters": {
+        "simulation": {
+          "dt": 0.005,
+          "duration": 20.0,
+          "integration_method": "rk4"
+        },
+        "actuators": {
+          "coarse_gimbal": {
+            "model": "first_order",
+            "time_constant": 0.05,
+            "friction": 0.001,
+            "backlash": 0.0,
+            "saturation_enabled": true,
+            "torque_limit": 1.0
+          },
+          "fsm": {
+            "model": "second_order",
+            "bandwidth": 500.0,
+            "damping": 0.707,
+            "nonlinearity": true,
+            "angle_limit_urad": 400.0
+          }
+        },
+        "sensors": {
+          "qpd": {
+            "noise_enabled": true,
+            "noise_std": 0.1,
+            "bias_enabled": false,
+            "quantization_enabled": true,
+            "resolution_urad": 0.05
+          },
+          "imu": {
+            "noise_enabled": true,
+            "gyro_noise_std": 0.001,
+            "accel_noise_std": 0.01
+          }
+        },
+        "disturbances": {
+          "base_motion": {
+            "enabled": true,
+            "amplitude": 0.001,
+            "frequency_hz": 10.0
+          },
+          "pointing_disturbance": {
+            "enabled": true,
+            "rms": 5.0
+          }
+        },
+        "estimator": {
+          "ekf_enabled": true,
+          "process_noise_scale": 1.0,
+          "measurement_noise_scale": 1.0
+        },
+        "controller": {
+          "gains": {
+            "coarse_kp": 50.0,
+            "coarse_kd": 10.0,
+            "fine_kp": 100.0,
+            "fine_ki": 5.0
+          },
+          "anti_windup_enabled": true,
+          "feedforward_enabled": true
+        },
+        "performance_thresholds": {
+          "rms_pointing_error_urad": 20.0,
+          "peak_pointing_error_urad": 100.0,
+          "fsm_saturation_percent_max": 5.0,
+          "stability_check_enabled": true
+        }
+      }
+    },
+    
+    "L3": {
+      "name": "System Test - High-Fidelity Validation",
+      "description": "High fidelity for system-level testing. Full nonlinear models with realistic noise and disturbances.",
+      "use_cases": [
+        "System validation testing",
+        "Performance verification",
+        "Disturbance rejection analysis",
+        "Monte Carlo preparation"
+      ],
+      "parameters": {
+        "simulation": {
+          "dt": 0.002,
+          "duration": 30.0,
+          "integration_method": "rk4"
+        },
+        "actuators": {
+          "coarse_gimbal": {
+            "model": "high_fidelity",
+            "time_constant": 0.05,
+            "friction": 0.002,
+            "backlash": 1.0,
+            "saturation_enabled": true,
+            "torque_limit": 1.0,
+            "rate_limit": 50.0
+          },
+          "fsm": {
+            "model": "high_fidelity",
+            "bandwidth": 500.0,
+            "damping": 0.707,
+            "nonlinearity": true,
+            "angle_limit_urad": 400.0,
+            "hysteresis_enabled": true
+          }
+        },
+        "sensors": {
+          "qpd": {
+            "noise_enabled": true,
+            "noise_std": 0.5,
+            "bias_enabled": true,
+            "bias_drift_rate": 0.01,
+            "quantization_enabled": true,
+            "resolution_urad": 0.1
+          },
+          "imu": {
+            "noise_enabled": true,
+            "gyro_noise_std": 0.005,
+            "accel_noise_std": 0.02,
+            "bias_enabled": true
+          }
+        },
+        "disturbances": {
+          "base_motion": {
+            "enabled": true,
+            "amplitude": 0.005,
+            "frequency_hz": 15.0,
+            "multi_frequency": true
+          },
+          "pointing_disturbance": {
+            "enabled": true,
+            "rms": 10.0,
+            "bandwidth_hz": 100.0
+          }
+        },
+        "estimator": {
+          "ekf_enabled": true,
+          "process_noise_scale": 1.5,
+          "measurement_noise_scale": 1.2
+        },
+        "controller": {
+          "gains": {
+            "coarse_kp": 50.0,
+            "coarse_kd": 10.0,
+            "fine_kp": 100.0,
+            "fine_ki": 5.0
+          },
+          "anti_windup_enabled": true,
+          "feedforward_enabled": true,
+          "adaptive_gains_enabled": false
+        },
+        "performance_thresholds": {
+          "rms_pointing_error_urad": 10.0,
+          "peak_pointing_error_urad": 50.0,
+          "fsm_saturation_percent_max": 3.0,
+          "stability_check_enabled": true
+        }
+      }
+    },
+    
+    "L4": {
+      "name": "Production - Full Fidelity Validation",
+      "description": "Maximum fidelity for final verification and acceptance testing. All nonlinear effects, flight-representative noise, fine timestep.",
+      "use_cases": [
+        "Final acceptance testing",
+        "Performance regression validation",
+        "Flight readiness review",
+        "Formal verification and validation (V&V)"
+      ],
+      "parameters": {
+        "simulation": {
+          "dt": 0.001,
+          "duration": 60.0,
+          "integration_method": "rk4",
+          "adaptive_timestep": false
+        },
+        "actuators": {
+          "coarse_gimbal": {
+            "model": "high_fidelity",
+            "time_constant": 0.05,
+            "friction": 0.003,
+            "coulomb_friction": 0.001,
+            "viscous_friction": 0.002,
+            "backlash": 2.0,
+            "saturation_enabled": true,
+            "torque_limit": 1.0,
+            "rate_limit": 50.0,
+            "thermal_effects_enabled": false
+          },
+          "fsm": {
+            "model": "high_fidelity",
+            "bandwidth": 500.0,
+            "damping": 0.707,
+            "nonlinearity": true,
+            "angle_limit_urad": 400.0,
+            "hysteresis_enabled": true,
+            "hysteresis_width": 5.0,
+            "creep_enabled": false
+          }
+        },
+        "sensors": {
+          "qpd": {
+            "noise_enabled": true,
+            "noise_std": 1.0,
+            "bias_enabled": true,
+            "bias_drift_rate": 0.02,
+            "quantization_enabled": true,
+            "resolution_urad": 0.1,
+            "dark_current_enabled": false,
+            "temperature_sensitivity": 0.0
+          },
+          "imu": {
+            "noise_enabled": true,
+            "gyro_noise_std": 0.01,
+            "accel_noise_std": 0.05,
+            "bias_enabled": true,
+            "gyro_bias_drift": 0.001,
+            "scale_factor_error": 0.0001
+          }
+        },
+        "disturbances": {
+          "base_motion": {
+            "enabled": true,
+            "amplitude": 0.01,
+            "frequency_hz": 20.0,
+            "multi_frequency": true,
+            "frequencies_hz": [5.0, 10.0, 15.0, 20.0],
+            "amplitudes": [0.005, 0.01, 0.007, 0.003]
+          },
+          "pointing_disturbance": {
+            "enabled": true,
+            "rms": 15.0,
+            "bandwidth_hz": 100.0,
+            "colored_noise": true
+          },
+          "thermal_disturbance": {
+            "enabled": false,
+            "gradient_rate": 0.0
+          }
+        },
+        "estimator": {
+          "ekf_enabled": true,
+          "process_noise_scale": 2.0,
+          "measurement_noise_scale": 1.5,
+          "adaptive_covariance": false
+        },
+        "controller": {
+          "gains": {
+            "coarse_kp": 50.0,
+            "coarse_kd": 10.0,
+            "fine_kp": 100.0,
+            "fine_ki": 5.0,
+            "fine_kd": 0.5
+          },
+          "anti_windup_enabled": true,
+          "feedforward_enabled": true,
+          "adaptive_gains_enabled": false,
+          "notch_filter_enabled": false
+        },
+        "performance_thresholds": {
+          "rms_pointing_error_urad": 2.0,
+          "peak_pointing_error_urad": 30.0,
+          "fsm_saturation_percent_max": 1.0,
+          "stability_check_enabled": true,
+          "nan_check_enabled": true,
+          "inf_check_enabled": true
+        }
+      }
+    }
+  },
+  
+  "default_fidelity": "L2",
+  
+  "regression_test_config": {
+    "fidelity_level": "L4",
+    "description": "CI/CD regression tests MUST use L4 (production) fidelity to enforce flight-grade performance thresholds",
+    "mandatory_checks": [
+      "rms_pointing_error",
+      "stability_no_nan_inf",
+      "fsm_saturation_limit"
+    ],
+    "failure_mode": "strict",
+    "tolerance": 0.0
+  },
+  
+  "monte_carlo_config": {
+    "quick_validation": {
+      "fidelity_level": "L2",
+      "num_runs": 10,
+      "description": "Fast Monte Carlo for development"
+    },
+    "production_validation": {
+      "fidelity_level": "L4",
+      "num_runs": 100,
+      "description": "Full Monte Carlo for acceptance"
+    }
+  }
+}

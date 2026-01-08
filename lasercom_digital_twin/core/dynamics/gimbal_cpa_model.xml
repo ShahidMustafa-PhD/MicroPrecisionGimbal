@@ -1,0 +1,56 @@
+<mujoco model="Lasercom_Gimbal_CPA_Mechanics">
+    <compiler angle="radian" inertiafromgeom="true" />
+    
+    <default>
+        <geom type="cylinder" material="default_mat" condim="3" solimp="0.9 0.95 0.001" solref="0.02 1"/>
+        
+        <joint damping="5.0" stiffness="0.0" /> 
+    </default>
+
+    <asset>
+        <material name="default_mat" specular="0.5" shininess="0.25" rgba=".5 .5 .5 1"/>
+        <material name="base_mat" specular="0.1" shininess="0.1" rgba=".2 .2 .2 1"/>
+        <material name="az_mat" specular="0.6" shininess="0.3" rgba=".1 .6 .1 1"/>
+        <material name="el_mat" specular="0.6" shininess="0.3" rgba=".1 .1 .6 1"/>
+    </asset>
+
+    <worldbody>
+        <geom name="ground" type="plane" size="0 0 1" rgba=".9 0 0 1" />
+        
+        <body name="base_mount" pos="0 0 0">
+            <geom name="base_geom" type="box" size="0.5 0.5 0.1" material="base_mat" />
+            <body name="az_stage" pos="0 0 0.1">
+                <joint name="az_joint" type="hinge" axis="0 0 1" 
+                       range="-3.14159 3.14159" stiffness="1000.0" damping="10.0" /> 
+                
+                <geom name="az_geom" type="cylinder" size="0.1 0.2" pos="0 0 0.2" material="az_mat" mass="50.0"/>
+                
+                <body name="el_stage" pos="0 0 0.4">
+                    <joint name="el_joint" type="hinge" axis="0 1 0" 
+                           range="0 1.5708" stiffness="1500.0" damping="15.0" /> <geom name="el_geom" type="box" size="0.3 0.1 0.15" pos="0 0 0.15" material="el_mat" mass="30.0" />
+                    
+                    <body name="payload_head" pos="0 0 0.35">
+                        <inertial pos="0 0 0" mass="10.0" diaginertia="0.1 0.1 0.1" /> 
+                        <geom name="payload_geom" type="sphere" size="0.1" material="default_mat" rgba=".8 .8 .8 1" />
+                    </body>
+                </body>
+            </body>
+        </body>
+    </worldbody>
+
+    <actuator>
+        </actuator>
+
+    <sensor>
+        </sensor>
+    
+    <tendon>
+        <spatial name="az_compliance_tendon" limited="false">
+             <site site="az_geom" />
+             <site site="base_geom" />
+             <geom geom="az_geom" />
+        </spatial>
+        
+        </tendon>
+
+</mujoco>

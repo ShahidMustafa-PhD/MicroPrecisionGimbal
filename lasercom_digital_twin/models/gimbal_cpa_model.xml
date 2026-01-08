@@ -1,0 +1,109 @@
+<mujoco model="laser_comm_gimbal">
+  <!--
+  MuJoCo Model: Ground-Based Laser Communication Terminal
+  
+  This model defines a 2-DOF azimuth-elevation gimbal for satellite tracking.
+  
+  Mechanical Structure:
+  - Base (fixed to ground)
+  - Azimuth stage (rotates about Z-axis)
+  - Elevation stage (rotates about Y-axis in azimuth frame)
+  - Optical payload (telescope + FSM + QPD)
+  
+  Coordinate System:
+  - X: Forward (North)
+  - Y: Left (West)
+  - Z: Up (Zenith)
+  
+  Units:
+  - Length: meters [m]
+  - Mass: kilograms [kg]
+  - Time: seconds [s]
+  - Force: Newtons [N]
+  - Torque: Newton-meters [N·m]
+  -->
+  
+  <compiler angle="radian" coordinate="local" inertiafromgeom="auto"/>
+  
+  <option timestep="0.001" gravity="0 0 -9.81" integrator="RK4">
+    <flag sensornoise="disable"/>
+  </option>
+  
+  <asset>
+    <!-- Material definitions for visualization -->
+    <material name="base_mat" rgba="0.3 0.3 0.3 1.0"/>
+    <material name="azimuth_mat" rgba="0.5 0.5 0.7 1.0"/>
+    <material name="elevation_mat" rgba="0.6 0.6 0.8 1.0"/>
+    <material name="payload_mat" rgba="0.8 0.8 0.9 1.0"/>
+  </asset>
+  
+  <worldbody>
+    <!-- Fixed base (pedestal) -->
+    <body name="base" pos="0 0 0">
+      <geom type="cylinder" size="0.3 0.1" rgba="0.3 0.3 0.3 1" mass="50"/>
+      
+      <!-- Azimuth stage (rotates about Z-axis) -->
+      <body name="azimuth_stage" pos="0 0 0.15">
+        <joint name="azimuth" type="hinge" axis="0 0 1" 
+               limited="false" damping="0.05" frictionloss="0.01"/>
+        <geom type="cylinder" size="0.25 0.05" material="azimuth_mat" mass="20"/>
+        <geom type="box" size="0.2 0.2 0.1" pos="0 0 0.1" material="azimuth_mat" mass="10"/>
+        
+        <!-- Inertial properties (approximation for azimuth axis) -->
+        <inertial pos="0 0 0.05" mass="30" 
+                  diaginertia="2.0 2.0 1.8"/>
+        
+        <!-- Elevation stage (rotates about Y-axis in azimuth frame) -->
+        <body name="elevation_stage" pos="0 0 0.2">
+          <joint name="elevation" type="hinge" axis="0 1 0" 
+                 limited="true" range="-0.1 1.57" damping="0.05" frictionloss="0.01"/>
+          <geom type="box" size="0.15 0.1 0.05" material="elevation_mat" mass="8"/>
+          
+          <!-- Inertial properties (approximation for elevation axis) -->
+          <inertial pos="0 0 0.1" mass="15" 
+                    diaginertia="1.5 1.2 0.8"/>
+          
+          <!-- Optical payload (telescope + instruments) -->
+          <body name="payload" pos="0 0 0.15">
+            <geom type="cylinder" size="0.12 0.3" material="payload_mat" mass="12"/>
+            <geom type="sphere" size="0.05" pos="0 0 0.35" material="payload_mat" mass="3"/>
+            
+            <!-- Inertial properties -->
+            <inertial pos="0 0 0.2" mass="15" 
+                      diaginertia="0.5 0.5 0.3"/>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  
+  <actuator>
+    <!-- Azimuth motor (direct torque control) -->
+    <motor name="az_motor" joint="azimuth" gear="1" ctrllimited="true" ctrlrange="-10 10"/>
+    
+    <!-- Elevation motor (direct torque control) -->
+    <motor name="el_motor" joint="elevation" gear="1" ctrllimited="true" ctrlrange="-10 10"/>
+  </actuator>
+  
+  <sensor>
+    <!-- Joint position sensors (encoders) -->
+    <jointpos name="az_position" joint="azimuth"/>
+    <jointpos name="el_position" joint="elevation"/>
+    
+    <!-- Joint velocity sensors (tachometers/gyros) -->
+    <jointvel name="az_velocity" joint="azimuth"/>
+    <jointvel name="el_velocity" joint="elevation"/>
+    
+    <!-- Accelerometers (optional, for advanced estimators) -->
+    <accelerometer name="az_accel" site="az_imu_site"/>
+    <accelerometer name="el_accel" site="el_imu_site"/>
+    
+    <!-- Gyroscopes (optional) -->
+    <gyro name="az_gyro" site="az_imu_site"/>
+    <gyro name="el_gyro" site="el_imu_site"/>
+  </sensor>
+  
+  <site name="az_imu_site" pos="0 0 0.1" size="0.01"/>
+  <site name="el_imu_site" pos="0 0 0.15" size="0.01"/>
+  
+</mujoco>

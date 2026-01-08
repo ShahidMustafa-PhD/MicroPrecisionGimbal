@@ -1,0 +1,849 @@
+"""
+Integrated Simulation Runner for Laser Communication Terminal Digital Twin
+
+This module implements the complete closed-loop simulation framework, integrating:
+- MuJoCo physics engine for gimbal dynamics
+- Custom actuator models (motor + FSM)
+- Non-ideal sensor models (encoders, gyros, QPD)
+- Extended Kalman Filter for state estimation
+- Hierarchical control architecture (coarse + fine)
+
+The simulation uses a fixed-step, multi-rate execution loop for deterministic
+behavior and realistic timing separation between subsystems.
+
+Multi-Rate Architecture:
+-----------------------
+- MuJoCo Dynamics: Δt_sim = 1 ms (fastest)
+- Fine Control (FSM): Δt_fine = 1 ms (high-bandwidth)
+- Coarse Control: Δt_coarse = 10 ms (low-bandwidth)
+- Sensors: Various rates depending on type
+
+Data Flow:
+---------
+MuJoCo State → Sensors → Estimator → Controllers → Actuators → MuJoCo Forces
+"""
+
+import numpy as np
+from typing import Dict, Optional, Tuple, List
+from dataclasses import dataclass, field
+import time
+from collections import defaultdict
+
+# Import all subsystem components
+from core.actuators.motor_models import GimbalMotorModel
+from core.actuators.fsm_actuator import FSMActuatorModel
+from core.sensors.sensor_models import AbsoluteEncoder, RateGyro
+from core.sensors.quadrant_detector import QuadrantDetector
+from core.estimators.state_estimator import PointingStateEstimator
+from core.controllers.control_laws import CoarseGimbalController
+from core.controllers.fsm_controller import FSMController
+from core.optics.optical_chain import TelescopeOptics, FocalPlanePosition
+from core.coordinate_frames.transformations import OpticalFrameCompensator
+
+
+@dataclass
+class SimulationConfig:
+    """Configuration for simulation runner."""
+    
+    # Timing
+    dt_sim: float = 0.001          # MuJoCo timestep [s] (1 ms)
+    dt_fine: float = 0.001         # FSM control rate [s] (1 ms)
+    dt_coarse: float = 0.010       # Coarse control rate [s] (10 ms)
+    dt_encoder: float = 0.001      # Encoder sample rate [s] (1 ms)
+    dt_gyro: float = 0.001         # Gyro sample rate [s] (1 ms)
+    dt_qpd: float = 0.001          # QPD sample rate [s] (1 ms)
+    log_period: float = 0.001      # Data logging rate [s] (1 ms)
+    
+    # Deterministic execution
+    seed: int = 42
+    
+    # Target tracking (for testing)
+    target_az: float = 0.0         # Target azimuth [rad]
+    target_el: float = 0.5         # Target elevation [rad]
+    target_enabled: bool = True
+    
+    # Component configs
+    motor_config: Dict = field(default_factory=dict)
+    fsm_config: Dict = field(default_factory=dict)
+    encoder_config: Dict = field(default_factory=dict)
+    gyro_config: Dict = field(default_factory=dict)
+    qpd_config: Dict = field(default_factory=dict)
+    estimator_config: Dict = field(default_factory=dict)
+    coarse_controller_config: Dict = field(default_factory=dict)
+    fsm_controller_config: Dict = field(default_factory=dict)
+    optics_config: Dict = field(default_factory=dict)
+    frame_config: Dict = field(default_factory=dict)
+
+
+@dataclass
+class SimulationState:
+    """Container for current simulation state."""
+    
+    # Time
+    time: float = 0.0
+    
+    # MuJoCo state (or placeholder dynamics)
+    q_az: float = 0.0              # Azimuth angle [rad]
+    q_el: float = 0.0              # Elevation angle [rad]
+    qd_az: float = 0.0             # Azimuth velocity [rad/s]
+    qd_el: float = 0.0             # Elevation velocity [rad/s]
+    
+    # FSM state
+    fsm_tip: float = 0.0           # FSM tip angle [rad]
+    fsm_tilt: float = 0.0          # FSM tilt angle [rad]
+    
+    # Control commands
+    torque_az: float = 0.0         # Azimuth motor torque [N·m]
+    torque_el: float = 0.0         # Elevation motor torque [N·m]
+    fsm_cmd_tip: float = 0.0       # FSM tip command [rad]
+    fsm_cmd_tilt: float = 0.0      # FSM tilt command [rad]
+    
+    # Sensor measurements
+    z_enc_az: float = 0.0          # Encoder azimuth [rad]
+    z_enc_el: float = 0.0          # Encoder elevation [rad]
+    z_gyro_az: float = 0.0         # Gyro azimuth [rad/s]
+    z_gyro_el: float = 0.0         # Gyro elevation [rad/s]
+    z_qpd_nes_x: float = 0.0       # QPD NES X
+    z_qpd_nes_y: float = 0.0       # QPD NES Y
+    
+    # Estimated state
+    est_az: float = 0.0            # Estimated azimuth [rad]
+    est_el: float = 0.0            # Estimated elevation [rad]
+    est_az_dot: float = 0.0        # Estimated azimuth rate [rad/s]
+    est_el_dot: float = 0.0        # Estimated elevation rate [rad/s]
+    
+    # Performance metrics
+    los_error_x: float = 0.0       # True LOS error X (tip) [rad]
+    los_error_y: float = 0.0       # True LOS error Y (tilt) [rad]
+    fsm_saturated: bool = False    # FSM saturation flag
+
+
+class DigitalTwinRunner:
+    """
+    Complete closed-loop simulation runner for laser comm terminal.
+    
+    This class integrates all subsystems into a deterministic, multi-rate
+    simulation loop. It handles:
+    1. Physics simulation (MuJoCo or simplified dynamics)
+    2. Multi-rate sensor sampling
+    3. State estimation (EKF)
+    4. Hierarchical control (coarse + fine)
+    5. Actuator dynamics
+    6. Data logging and telemetry
+    
+    The simulation enforces strict timing separation between control loops
+    to accurately model real-world system behavior.
+    
+    Usage:
+    ------
+    >>> config = SimulationConfig(seed=42)
+    >>> runner = DigitalTwinRunner(config)
+    >>> results = runner.run_simulation(duration=5.0)
+    >>> print(f"Final LOS error: {results['los_error_rms']:.2e} rad")
+    """
+    
+    def __init__(self, config: SimulationConfig):
+        """
+        Initialize the digital twin simulation runner.
+        
+        Parameters
+        ----------
+        config : SimulationConfig
+            Complete configuration for all subsystems and timing
+        """
+        self.config = config
+        
+        # Set deterministic seed
+        self.rng = np.random.default_rng(config.seed)
+        
+        # Initialize timing counters
+        self.time: float = 0.0
+        self.iteration: int = 0
+        self.last_coarse_update: float = 0.0
+        self.last_fine_update: float = 0.0
+        self.last_encoder_update: float = 0.0
+        self.last_gyro_update: float = 0.0
+        self.last_qpd_update: float = 0.0
+        self.last_log_time: float = 0.0
+        
+        # Initialize MuJoCo or placeholder dynamics
+        self._init_dynamics()
+        
+        # Initialize actuators
+        self._init_actuators()
+        
+        # Initialize sensors
+        self._init_sensors()
+        
+        # Initialize optical chain
+        self._init_optics()
+        
+        # Initialize estimator
+        self._init_estimator()
+        
+        # Initialize controllers
+        self._init_controllers()
+        
+        # Initialize data logging
+        self._init_logging()
+        
+        # Current state
+        self.state = SimulationState()
+        
+    def _init_dynamics(self) -> None:
+        """
+        Initialize dynamics model (MuJoCo or simplified).
+        
+        In production, this would load gimbal_cpa_model.xml into MuJoCo.
+        For now, implements simplified rigid-body dynamics as placeholder.
+        """
+        # MuJoCo interface (placeholder - would use mujoco library)
+        self.use_mujoco = False  # Set to True when MuJoCo model is available
+        
+        if self.use_mujoco:
+            # TODO: Load MuJoCo model
+            # import mujoco
+            # self.mj_model = mujoco.MjModel.from_xml_path("gimbal_cpa_model.xml")
+            # self.mj_data = mujoco.MjData(self.mj_model)
+            pass
+        else:
+            # Simplified dynamics model
+            self.inertia_az = 2.0  # kg·m²
+            self.inertia_el = 1.5  # kg·m²
+            self.friction_az = 0.05  # N·m·s/rad
+            self.friction_el = 0.05  # N·m·s/rad
+            
+            # State variables
+            self.q_az = 0.0
+            self.q_el = 0.0
+            self.qd_az = 0.0
+            self.qd_el = 0.0
+    
+    def _init_actuators(self) -> None:
+        """Initialize motor and FSM actuator models."""
+        # Gimbal motors (Az/El)
+        motor_config = self.config.motor_config or {
+            'R': 2.0,
+            'L': 0.005,
+            'K_t': 0.5,
+            'K_e': 0.5,
+            'tau_max': 10.0,
+            'tau_min': -10.0,
+            'cogging_amplitude': 0.05,
+            'cogging_frequency': 10,
+            'seed': self.config.seed
+        }
+        
+        self.motor_az = GimbalMotorModel(motor_config)
+        self.motor_el = GimbalMotorModel(motor_config)
+        
+        # Fast Steering Mirror
+        fsm_config = self.config.fsm_config or {
+            'natural_frequency': 500.0,
+            'damping_ratio': 0.7,
+            'max_angle': 0.01,
+            'hysteresis_amplitude': 5e-5,
+            'max_rate': 1.0,
+            'seed': self.config.seed + 1
+        }
+        
+        self.fsm = FSMActuatorModel(fsm_config)
+    
+    def _init_sensors(self) -> None:
+        """Initialize all sensor models."""
+        # Absolute encoders (Az/El)
+        encoder_config = self.config.encoder_config or {
+            'resolution_bits': 20,
+            'noise_std': 1e-6,
+            'bias': 0.0,
+            'seed': self.config.seed + 2
+        }
+        
+        self.encoder_az = AbsoluteEncoder(encoder_config)
+        self.encoder_el = AbsoluteEncoder({**encoder_config, 'seed': self.config.seed + 3})
+        
+        # Rate gyros (Az/El)
+        gyro_config = self.config.gyro_config or {
+            'arw_std': 1e-5,
+            'bias_std': 1e-6,
+            'bias_instability': 1e-7,
+            'latency': 0.002,
+            'seed': self.config.seed + 4
+        }
+        
+        self.gyro_az = RateGyro(gyro_config)
+        self.gyro_el = RateGyro({**gyro_config, 'seed': self.config.seed + 5})
+        
+        # Quadrant Photo Detector
+        qpd_config = self.config.qpd_config or {
+            'sensitivity': 2000.0,
+            'linear_range': 0.001,
+            'noise_std': 1e-4,
+            'bias_x': 0.0,
+            'bias_y': 0.0,
+            'nonlinearity_coeff': 100.0,
+            'spot_size_um': 50.0,
+            'seed': self.config.seed + 6
+        }
+        
+        self.qpd = QuadrantDetector(qpd_config)
+    
+    def _init_optics(self) -> None:
+        """Initialize optical chain and coordinate transformations."""
+        # Telescope optics
+        optics_config = self.config.optics_config or {
+            'focal_length_m': 1.5,
+            'aperture_diameter_m': 0.3,
+            'wavelength_m': 1550e-9,
+            'detector_size_um': 1000.0
+        }
+        
+        self.optics = TelescopeOptics(optics_config)
+        
+        # Optical frame compensator
+        frame_config = self.config.frame_config or {
+            'site_latitude_deg': 35.0,
+            'epsilon_az': 0.0,
+            'epsilon_el': 0.0
+        }
+        
+        self.frame_compensator = OpticalFrameCompensator(frame_config)
+    
+    def _init_estimator(self) -> None:
+        """Initialize Extended Kalman Filter."""
+        estimator_config = self.config.estimator_config or {
+            'initial_state': np.zeros(10),
+            'inertia_az': self.inertia_az,
+            'inertia_el': self.inertia_el,
+            'friction_coeff_az': self.friction_az,
+            'friction_coeff_el': self.friction_el,
+            'process_noise_std': [1e-8, 1e-6, 1e-9, 1e-8, 1e-6, 1e-9, 1e-7, 1e-6, 1e-4, 1e-4],
+            'measurement_noise_std': [2.4e-5, 2.4e-5, 1e-6, 1e-6, 1e-4, 1e-4]
+        }
+        
+        self.estimator = PointingStateEstimator(estimator_config)
+    
+    def _init_controllers(self) -> None:
+        """Initialize hierarchical control system."""
+        # Coarse gimbal controller (Level 1)
+        coarse_config = self.config.coarse_controller_config or {
+            'kp': 50.0,
+            'ki': 5.0,
+            'kd': 2.0,
+            'anti_windup_gain': 1.0,
+            'tau_rate_limit': 50.0,
+            'setpoint_filter_wn': 10.0,
+            'setpoint_filter_zeta': 0.7
+        }
+        
+        self.coarse_controller = CoarseGimbalController(coarse_config)
+        
+        # Fine FSM controller (Level 2)
+        fsm_controller_config = self.config.fsm_controller_config or {
+            'kp_tip': 100.0,
+            'kp_tilt': 100.0,
+            'ki_tip': 50.0,
+            'ki_tilt': 50.0,
+            'max_angle': 0.01,
+            'enable_feedforward': True,
+            'enable_high_pass_filter': False
+        }
+        
+        self.fsm_controller = FSMController(fsm_controller_config)
+    
+    def _init_logging(self) -> None:
+        """Initialize data logging infrastructure."""
+        self.log_data: Dict[str, List] = defaultdict(list)
+        
+        # Define signals to log
+        self.log_signals = [
+            'time',
+            'q_az', 'q_el', 'qd_az', 'qd_el',
+            'est_az', 'est_el', 'est_az_dot', 'est_el_dot',
+            'torque_az', 'torque_el',
+            'fsm_tip', 'fsm_tilt', 'fsm_cmd_tip', 'fsm_cmd_tilt',
+            'fsm_saturated',
+            'z_enc_az', 'z_enc_el', 'z_gyro_az', 'z_gyro_el',
+            'z_qpd_nes_x', 'z_qpd_nes_y',
+            'los_error_x', 'los_error_y',
+            'target_az', 'target_el'
+        ]
+    
+    def _step_dynamics(self, dt: float) -> None:
+        """
+        Step the dynamics forward (MuJoCo or simplified).
+        
+        Applies actuator torques and integrates equations of motion.
+        
+        Parameters
+        ----------
+        dt : float
+            Timestep [s]
+        """
+        if self.use_mujoco:
+            # MuJoCo integration
+            # self.mj_data.ctrl[0] = self.state.torque_az
+            # self.mj_data.ctrl[1] = self.state.torque_el
+            # mujoco.mj_step(self.mj_model, self.mj_data)
+            # self.q_az = self.mj_data.qpos[0]
+            # self.q_el = self.mj_data.qpos[1]
+            # self.qd_az = self.mj_data.qvel[0]
+            # self.qd_el = self.mj_data.qvel[1]
+            pass
+        else:
+            # Simplified Euler integration
+            # θ̈ = (τ - b·θ̇) / J
+            accel_az = (self.state.torque_az - self.friction_az * self.qd_az) / self.inertia_az
+            accel_el = (self.state.torque_el - self.friction_el * self.qd_el) / self.inertia_el
+            
+            # Integrate
+            self.qd_az += accel_az * dt
+            self.qd_el += accel_el * dt
+            self.q_az += self.qd_az * dt
+            self.q_el += self.qd_el * dt
+            
+            # Update state container
+            self.state.q_az = self.q_az
+            self.state.q_el = self.q_el
+            self.state.qd_az = self.qd_az
+            self.state.qd_el = self.qd_el
+    
+    def _sample_sensors(self) -> None:
+        """
+        Sample all sensors at their respective rates.
+        
+        Checks timing and updates sensor measurements when appropriate.
+        """
+        # Encoder sampling
+        if (self.time - self.last_encoder_update) >= self.config.dt_encoder:
+            self.state.z_enc_az = self.encoder_az.measure(self.state.q_az)
+            self.state.z_enc_el = self.encoder_el.measure(self.state.q_el)
+            self.last_encoder_update = self.time
+        
+        # Gyro sampling
+        if (self.time - self.last_gyro_update) >= self.config.dt_gyro:
+            self.state.z_gyro_az = self.gyro_az.measure(self.state.qd_az)
+            self.state.z_gyro_el = self.gyro_el.measure(self.state.qd_el)
+            self.gyro_az.update(self.config.dt_gyro)
+            self.gyro_el.update(self.config.dt_gyro)
+            self.last_gyro_update = self.time
+        
+        # QPD sampling (requires optical chain calculation)
+        if (self.time - self.last_qpd_update) >= self.config.dt_qpd:
+            self._update_qpd_measurement()
+            self.last_qpd_update = self.time
+    
+    def _update_qpd_measurement(self) -> None:
+        """
+        Compute QPD measurement through optical chain.
+        
+        Flow: Gimbal angles → LOS error → FSM correction → Focal plane → QPD
+        """
+        # Compute pointing error
+        if self.config.target_enabled:
+            error_az = self.config.target_az - self.state.q_az
+            error_el = self.config.target_el - self.state.q_el
+        else:
+            error_az = 0.0
+            error_el = 0.0
+        
+        # Store true LOS error
+        self.state.los_error_x = error_az
+        self.state.los_error_y = error_el
+        
+        # Apply FSM correction to beam pointing
+        # FSM deflects beam by 2× mirror angle
+        corrected_error_az = error_az - 2.0 * self.state.fsm_tip
+        corrected_error_el = error_el - 2.0 * self.state.fsm_tilt
+        
+        # Map to focal plane
+        focal_pos = self.optics.compute_spot_position(
+            corrected_error_az,
+            corrected_error_el,
+            fsm_tip_rad=0.0,  # Already applied above
+            fsm_tilt_rad=0.0
+        )
+        
+        # QPD measures from focal plane position
+        nes_x, nes_y = self.qpd.measure_from_focal_plane(focal_pos.x_um, focal_pos.y_um)
+        self.state.z_qpd_nes_x = nes_x
+        self.state.z_qpd_nes_y = nes_y
+    
+    def _update_estimator(self) -> None:
+        """
+        Update state estimator (EKF prediction + correction).
+        
+        Runs at coarse control rate.
+        """
+        # Build control input vector
+        u = np.array([self.state.torque_az, self.state.torque_el])
+        
+        # Build measurement dictionary
+        measurements = {
+            'theta_az_enc': self.state.z_enc_az,
+            'theta_el_enc': self.state.z_enc_el,
+            'theta_dot_az_gyro': self.state.z_gyro_az,
+            'theta_dot_el_gyro': self.state.z_gyro_el,
+            'nes_x_qpd': self.state.z_qpd_nes_x,
+            'nes_y_qpd': self.state.z_qpd_nes_y
+        }
+        
+        # EKF step
+        self.estimator.step(u, measurements, self.config.dt_coarse)
+        
+        # Extract fused state
+        fused_state = self.estimator.get_fused_state()
+        self.state.est_az = fused_state['theta_az']
+        self.state.est_el = fused_state['theta_el']
+        self.state.est_az_dot = fused_state['theta_dot_az']
+        self.state.est_el_dot = fused_state['theta_dot_el']
+    
+    def _update_coarse_controller(self) -> None:
+        """
+        Update coarse gimbal controller (Level 1).
+        
+        Runs at coarse control rate (~10 Hz).
+        """
+        # Setpoints (target tracking)
+        setpoint = np.array([self.config.target_az, self.config.target_el])
+        
+        # Estimated state
+        position_est = np.array([self.state.est_az, self.state.est_el])
+        velocity_est = np.array([self.state.est_az_dot, self.state.est_el_dot])
+        
+        # Compute control for both axes
+        tau_cmd, meta = self.coarse_controller.compute_control(
+            setpoint,
+            position_est,
+            self.config.dt_coarse,
+            velocity_estimate=velocity_est
+        )
+        
+        # Extract Az/El torques
+        tau_az = tau_cmd[0]
+        tau_el = tau_cmd[1]
+        
+        # Get residual error for FSM feedforward
+        residual_error = self.coarse_controller.get_residual_error_for_fsm(setpoint, position_est)
+        
+        # Store for FSM controller
+        self.coarse_residual = residual_error
+        
+        # Update motor models with voltage commands
+        # Convert torque command to voltage (simplified: τ = K_t * I, V = R * I)
+        # V ≈ τ / K_t * R (ignoring inductance for steady-state)
+        voltage_az = tau_az
+        voltage_el = tau_el
+        
+        # Step motor models
+        actual_tau_az = self.motor_az.step(
+            voltage_az,
+            self.state.qd_az,
+            self.state.q_az,
+            self.config.dt_coarse
+        )
+        actual_tau_el = self.motor_el.step(
+            voltage_el,
+            self.state.qd_el,
+            self.state.q_el,
+            self.config.dt_coarse
+        )
+        
+        # Update state
+        self.state.torque_az = actual_tau_az
+        self.state.torque_el = actual_tau_el
+    
+    def _update_fine_controller(self) -> None:
+        """
+        Update fine FSM controller (Level 2).
+        
+        Runs at fine control rate (~1 kHz).
+        """
+        # QPD error signal (already in tip/tilt)
+        qpd_error = np.array([self.state.z_qpd_nes_x, self.state.z_qpd_nes_y])
+        
+        # Compute FSM command with feedforward (returns tuple: command, metadata)
+        fsm_cmd, fsm_meta = self.fsm_controller.compute_control(
+            qpd_error,
+            self.config.dt_fine,
+            coarse_residual=self.coarse_residual if hasattr(self, 'coarse_residual') else None
+        )
+        
+        # Store commands (extract scalars)
+        tip_val = fsm_cmd[0].item() if hasattr(fsm_cmd[0], 'item') else float(fsm_cmd[0])
+        tilt_val = fsm_cmd[1].item() if hasattr(fsm_cmd[1], 'item') else float(fsm_cmd[1])
+        
+        self.state.fsm_cmd_tip = tip_val
+        self.state.fsm_cmd_tilt = tilt_val
+        
+        # Check saturation
+        self.state.fsm_saturated = self.fsm_controller.is_saturated()
+        
+        # Update FSM actuator model
+        self.fsm.step(tip_val, tilt_val, self.config.dt_fine)
+        
+        # Get actual FSM position
+        fsm_state = self.fsm.get_state()
+        self.state.fsm_tip = fsm_state['alpha']  # Tip = alpha
+        self.state.fsm_tilt = fsm_state['beta']  # Tilt = beta
+    
+    def _log_data(self) -> None:
+        """
+        Log current state to telemetry buffer.
+        
+        Logs at specified log_period rate.
+        """
+        if (self.time - self.last_log_time) >= self.config.log_period:
+            # Log all signals
+            self.log_data['time'].append(self.time)
+            self.log_data['q_az'].append(self.state.q_az)
+            self.log_data['q_el'].append(self.state.q_el)
+            self.log_data['qd_az'].append(self.state.qd_az)
+            self.log_data['qd_el'].append(self.state.qd_el)
+            self.log_data['est_az'].append(self.state.est_az)
+            self.log_data['est_el'].append(self.state.est_el)
+            self.log_data['est_az_dot'].append(self.state.est_az_dot)
+            self.log_data['est_el_dot'].append(self.state.est_el_dot)
+            self.log_data['torque_az'].append(self.state.torque_az)
+            self.log_data['torque_el'].append(self.state.torque_el)
+            self.log_data['fsm_tip'].append(self.state.fsm_tip)
+            self.log_data['fsm_tilt'].append(self.state.fsm_tilt)
+            self.log_data['fsm_cmd_tip'].append(self.state.fsm_cmd_tip)
+            self.log_data['fsm_cmd_tilt'].append(self.state.fsm_cmd_tilt)
+            self.log_data['fsm_saturated'].append(self.state.fsm_saturated)
+            self.log_data['z_enc_az'].append(self.state.z_enc_az)
+            self.log_data['z_enc_el'].append(self.state.z_enc_el)
+            self.log_data['z_gyro_az'].append(self.state.z_gyro_az)
+            self.log_data['z_gyro_el'].append(self.state.z_gyro_el)
+            self.log_data['z_qpd_nes_x'].append(self.state.z_qpd_nes_x)
+            self.log_data['z_qpd_nes_y'].append(self.state.z_qpd_nes_y)
+            self.log_data['los_error_x'].append(self.state.los_error_x)
+            self.log_data['los_error_y'].append(self.state.los_error_y)
+            self.log_data['target_az'].append(self.config.target_az)
+            self.log_data['target_el'].append(self.config.target_el)
+            
+            self.last_log_time = self.time
+    
+    def run_simulation(self, duration: float) -> Dict:
+        """
+        Execute the complete multi-rate closed-loop simulation.
+        
+        This is the main entry point for running the digital twin. It orchestrates
+        all subsystems in a fixed-step loop with proper timing separation.
+        
+        Execution Order (each timestep):
+        -------------------------------
+        1. Step dynamics (apply forces, integrate EOM)
+        2. Sample sensors (at their respective rates)
+        3. Update estimator (at coarse rate)
+        4. Update coarse controller (at coarse rate)
+        5. Update fine controller (at fine rate)
+        6. Log data (at log rate)
+        
+        Parameters
+        ----------
+        duration : float
+            Total simulation time [s]
+            
+        Returns
+        -------
+        Dict
+            Complete logged telemetry and performance summary
+        """
+        print(f"Starting simulation for {duration:.2f} seconds...")
+        print(f"  dt_sim: {self.config.dt_sim*1e3:.2f} ms")
+        print(f"  dt_coarse: {self.config.dt_coarse*1e3:.2f} ms")
+        print(f"  dt_fine: {self.config.dt_fine*1e3:.2f} ms")
+        print(f"  Target: Az={np.rad2deg(self.config.target_az):.2f}°, El={np.rad2deg(self.config.target_el):.2f}°")
+        
+        start_time = time.time()
+        
+        # Main simulation loop
+        n_steps = int(duration / self.config.dt_sim)
+        
+        for i in range(n_steps):
+            # Update time
+            self.time = i * self.config.dt_sim
+            self.iteration = i
+            
+            # 1. Step dynamics forward
+            self._step_dynamics(self.config.dt_sim)
+            
+            # 2. Sample sensors (multi-rate)
+            self._sample_sensors()
+            
+            # 3. Update estimator (at coarse rate)
+            if (self.time - self.last_coarse_update) >= self.config.dt_coarse:
+                self._update_estimator()
+                self._update_coarse_controller()
+                self.last_coarse_update = self.time
+            
+            # 4. Update fine controller (at fine rate)
+            if (self.time - self.last_fine_update) >= self.config.dt_fine:
+                self._update_fine_controller()
+                self.last_fine_update = self.time
+            
+            # 5. Log data
+            self._log_data()
+            
+            # Progress indicator
+            if i % (n_steps // 10) == 0 and i > 0:
+                progress = 100.0 * i / n_steps
+                print(f"  Progress: {progress:.0f}%")
+        
+        elapsed_time = time.time() - start_time
+        print(f"Simulation complete in {elapsed_time:.2f} seconds")
+        print(f"  Real-time factor: {duration/elapsed_time:.1f}x")
+        
+        # Compute performance summary
+        results = self._compute_summary()
+        
+        return results
+    
+    def _compute_summary(self) -> Dict:
+        """
+        Compute performance metrics from logged data.
+        
+        Returns
+        -------
+        Dict
+            Performance summary with RMS errors, statistics
+        """
+        # Convert lists to arrays
+        log_arrays = {key: np.array(val) for key, val in self.log_data.items()}
+        
+        # Compute RMS errors
+        los_error_rms_x = np.sqrt(np.mean(log_arrays['los_error_x']**2))
+        los_error_rms_y = np.sqrt(np.mean(log_arrays['los_error_y']**2))
+        los_error_rms = np.sqrt(los_error_rms_x**2 + los_error_rms_y**2)
+        
+        # Estimation error
+        est_error_az = log_arrays['q_az'] - log_arrays['est_az']
+        est_error_el = log_arrays['q_el'] - log_arrays['est_el']
+        est_error_rms = np.sqrt(np.mean(est_error_az**2 + est_error_el**2))
+        
+        # FSM saturation statistics
+        fsm_saturation_percent = 100.0 * np.sum(log_arrays['fsm_saturated']) / len(log_arrays['fsm_saturated'])
+        
+        # Control effort
+        torque_rms_az = np.sqrt(np.mean(log_arrays['torque_az']**2))
+        torque_rms_el = np.sqrt(np.mean(log_arrays['torque_el']**2))
+        
+        summary = {
+            'log_data': self.log_data,
+            'log_arrays': log_arrays,
+            'n_samples': len(log_arrays['time']),
+            'duration': log_arrays['time'][-1] if len(log_arrays['time']) > 0 else 0.0,
+            'los_error_rms': los_error_rms,
+            'los_error_rms_x': los_error_rms_x,
+            'los_error_rms_y': los_error_rms_y,
+            'los_error_final': np.sqrt(log_arrays['los_error_x'][-1]**2 + log_arrays['los_error_y'][-1]**2),
+            'est_error_rms': est_error_rms,
+            'fsm_saturation_percent': fsm_saturation_percent,
+            'torque_rms_az': torque_rms_az,
+            'torque_rms_el': torque_rms_el,
+            'final_az': log_arrays['q_az'][-1],
+            'final_el': log_arrays['q_el'][-1]
+        }
+        
+        return summary
+    
+    def reset(self) -> None:
+        """Reset simulation to initial conditions."""
+        self.time = 0.0
+        self.iteration = 0
+        self.last_coarse_update = 0.0
+        self.last_fine_update = 0.0
+        self.last_encoder_update = 0.0
+        self.last_gyro_update = 0.0
+        self.last_qpd_update = 0.0
+        self.last_log_time = 0.0
+        
+        # Reset dynamics
+        self.q_az = 0.0
+        self.q_el = 0.0
+        self.qd_az = 0.0
+        self.qd_el = 0.0
+        
+        # Reset all components
+        self.motor_az.reset()
+        self.motor_el.reset()
+        self.fsm.reset()
+        self.encoder_az.reset()
+        self.encoder_el.reset()
+        self.gyro_az.reset()
+        self.gyro_el.reset()
+        self.qpd.reset()
+        self.estimator.reset()
+        self.coarse_controller.reset()
+        self.fsm_controller.reset()
+        
+        # Reset state
+        self.state = SimulationState()
+        
+        # Clear logs
+        self.log_data.clear()
+
+
+def main():
+    """
+    Demonstration of digital twin simulation.
+    
+    Runs a 5-second closed-loop simulation with target tracking.
+    """
+    print("=" * 70)
+    print("Laser Communication Terminal Digital Twin")
+    print("Integrated Closed-Loop Simulation")
+    print("=" * 70)
+    print()
+    
+    # Configure simulation
+    config = SimulationConfig(
+        dt_sim=0.001,        # 1 ms physics timestep
+        dt_coarse=0.010,     # 10 ms coarse control
+        dt_fine=0.001,       # 1 ms fine control
+        log_period=0.001,    # 1 ms logging
+        seed=42,
+        target_az=np.deg2rad(5.0),   # 5° azimuth target
+        target_el=np.deg2rad(30.0),  # 30° elevation target
+        target_enabled=True
+    )
+    
+    # Create runner
+    runner = DigitalTwinRunner(config)
+    
+    # Run simulation
+    results = runner.run_simulation(duration=5.0)
+    
+    # Print summary
+    print()
+    print("=" * 70)
+    print("SIMULATION RESULTS")
+    print("=" * 70)
+    print(f"Duration:          {results['duration']:.3f} s")
+    print(f"Samples logged:    {results['n_samples']}")
+    print()
+    print("POINTING PERFORMANCE:")
+    print(f"  LOS Error RMS:   {results['los_error_rms']*1e6:.2f} µrad")
+    print(f"  LOS Error Final: {results['los_error_final']*1e6:.2f} µrad")
+    print(f"  LOS Error X RMS: {results['los_error_rms_x']*1e6:.2f} µrad")
+    print(f"  LOS Error Y RMS: {results['los_error_rms_y']*1e6:.2f} µrad")
+    print()
+    print("ESTIMATION PERFORMANCE:")
+    print(f"  State Est. RMS:  {results['est_error_rms']*1e6:.2f} µrad")
+    print()
+    print("CONTROL EFFORT:")
+    print(f"  Torque Az RMS:   {results['torque_rms_az']:.3f} N·m")
+    print(f"  Torque El RMS:   {results['torque_rms_el']:.3f} N·m")
+    print(f"  FSM Saturation:  {results['fsm_saturation_percent']:.1f}%")
+    print()
+    print("FINAL STATE:")
+    print(f"  Azimuth:         {np.rad2deg(results['final_az']):.3f}°")
+    print(f"  Elevation:       {np.rad2deg(results['final_el']):.3f}°")
+    print("=" * 70)
+    
+    return results
+
+
+if __name__ == '__main__':
+    results = main()
