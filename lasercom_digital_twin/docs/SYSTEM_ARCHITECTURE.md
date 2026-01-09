@@ -137,7 +137,7 @@ I-Frame → S-Frame → M-Frame → O-Frame → Q-Frame
 | **Communication Protocol** | The modeling of the actual data transmission/reception (the laser communication layer itself) is excluded; only the pointing link is considered. |
 
 ---
-
+##
 ## 5. System Design Philosophy
 
 ### Hierarchical Control Architecture
