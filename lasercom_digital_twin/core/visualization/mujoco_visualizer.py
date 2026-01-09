@@ -257,8 +257,73 @@ class MuJoCoVisualizer:
             self.viewer_thread.start()
             
             # Wait for viewer to initialize
-            time.sleep(0.5)
-    
+            max_wait = 5.0
+            wait_start = time.time()
+            while self.viewer is None and (time.time() - wait_start) < max_wait:
+                time.sleep(0.1)
+                
+            if self.viewer is None:
+                print("Warning: Viewer failed to initialize within timeout.")
+
+    def start(
+        self,
+        simulation_step_callback: Callable,
+        max_duration: float,
+        real_time: bool = True
+    ):
+        """
+        Start the visualization and orchestrate the simulation loop.
+        
+        This method is the primary high-level interface for running simulations
+        with interactive visualization.
+        
+        Parameters
+        ----------
+        simulation_step_callback : Callable
+            Function that executes one simulation step and returns current state
+        max_duration : float
+            Maximum duration of simulation in seconds
+        real_time : bool
+            If True, attempts to sync simulation time with wall-clock time
+        """
+        # Launch viewer in background thread
+        self.launch(blocking=False)
+        
+        print(f"Starting simulation loop (Max duration: {max_duration}s, Real-time: {real_time})")
+        
+        sim_start_wall = time.time()
+        sim_time = 0.0
+        
+        try:
+            while self.is_running and sim_time < max_duration:
+                # Execute simulation step
+                state = simulation_step_callback()
+                
+                # Update local sim time reference
+                if hasattr(state, 'time'):
+                    sim_time = state.time
+                else:
+                    # Fallback if state doesn't have time attribute
+                    sim_time += 0.001 
+                
+                # Synchronize with real-time if requested
+                if real_time:
+                    wall_elapsed = time.time() - sim_start_wall
+                    if sim_time > wall_elapsed:
+                        # Simulation is running faster than real-time, sleep
+                        # But don't sleep too long to keep viewer responsive
+                        time.sleep(min(0.01, sim_time - wall_elapsed))
+                
+                # If viewer window is closed, stop simulation
+                if self.viewer is not None and not self.viewer.is_running():
+                    print("Viewer closed by user. Stopping simulation.")
+                    break
+                    
+        except KeyboardInterrupt:
+            print("Simulation interrupted by user.")
+        finally:
+            self.close()
+
     def _run_viewer(self):
         """Internal method to run viewer loop."""
         self.is_running = True

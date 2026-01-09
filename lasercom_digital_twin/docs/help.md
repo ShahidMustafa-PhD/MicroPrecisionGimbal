@@ -57,6 +57,8 @@ To launch the simulation with the `MuJoCoVisualizer` active, use the `--visualiz
 python -m lasercom_digital_twin.runner --fidelity L4 --duration 30 --visualize
 ```
 
+**Note:** Ensure you are in the project root directory (`C:\Active_Projects\MicroPrecisionGimbal`) and that the virtual environment is activated. If you encounter module import errors, verify that `lasercom_digital_twin/runner.py` exists and that all dependencies are installed.
+
 **Expected Outcome:**
 1. A console window will display simulation logs.
 2. A separate MuJoCo window will open, showing the 3D model of the gimbal.

@@ -26,7 +26,6 @@
   <compiler angle="radian" coordinate="local" inertiafromgeom="auto"/>
   
   <option timestep="0.001" gravity="0 0 -9.81" integrator="RK4">
-    <flag sensornoise="disable"/>
   </option>
   
   <asset>
@@ -53,6 +52,8 @@
         <inertial pos="0 0 0.05" mass="30" 
                   diaginertia="2.0 2.0 1.8"/>
         
+        <site name="az_imu_site" pos="0 0 0.1" size="0.01"/>
+
         <!-- Elevation stage (rotates about Y-axis in azimuth frame) -->
         <body name="elevation_stage" pos="0 0 0.2">
           <joint name="elevation" type="hinge" axis="0 1 0" 
@@ -63,6 +64,8 @@
           <inertial pos="0 0 0.1" mass="15" 
                     diaginertia="1.5 1.2 0.8"/>
           
+          <site name="el_imu_site" pos="0 0 0.15" size="0.01"/>
+
           <!-- Optical payload (telescope + instruments) -->
           <body name="payload" pos="0 0 0.15">
             <geom type="cylinder" size="0.12 0.3" material="payload_mat" mass="12"/>
@@ -102,8 +105,5 @@
     <gyro name="az_gyro" site="az_imu_site"/>
     <gyro name="el_gyro" site="el_imu_site"/>
   </sensor>
-  
-  <site name="az_imu_site" pos="0 0 0.1" size="0.01"/>
-  <site name="el_imu_site" pos="0 0 0.15" size="0.01"/>
   
 </mujoco>

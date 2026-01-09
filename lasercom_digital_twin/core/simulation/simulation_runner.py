@@ -28,17 +28,18 @@ from typing import Dict, Optional, Tuple, List
 from dataclasses import dataclass, field
 import time
 from collections import defaultdict
+import threading
 
 # Import all subsystem components
-from core.actuators.motor_models import GimbalMotorModel
-from core.actuators.fsm_actuator import FSMActuatorModel
-from core.sensors.sensor_models import AbsoluteEncoder, RateGyro
-from core.sensors.quadrant_detector import QuadrantDetector
-from core.estimators.state_estimator import PointingStateEstimator
-from core.controllers.control_laws import CoarseGimbalController
-from core.controllers.fsm_controller import FSMController
-from core.optics.optical_chain import TelescopeOptics, FocalPlanePosition
-from core.coordinate_frames.transformations import OpticalFrameCompensator
+from lasercom_digital_twin.core.actuators.motor_models import GimbalMotorModel
+from lasercom_digital_twin.core.actuators.fsm_actuator import FSMActuatorModel
+from lasercom_digital_twin.core.sensors.sensor_models import AbsoluteEncoder, RateGyro
+from lasercom_digital_twin.core.sensors.quadrant_detector import QuadrantDetector
+from lasercom_digital_twin.core.estimators.state_estimator import PointingStateEstimator
+from lasercom_digital_twin.core.controllers.control_laws import CoarseGimbalController
+from lasercom_digital_twin.core.controllers.fsm_controller import FSMController
+from lasercom_digital_twin.core.optics.optical_chain import TelescopeOptics, FocalPlanePosition
+from lasercom_digital_twin.core.coordinate_frames.transformations import OpticalFrameCompensator
 
 
 @dataclass
@@ -53,6 +54,11 @@ class SimulationConfig:
     dt_gyro: float = 0.001         # Gyro sample rate [s] (1 ms)
     dt_qpd: float = 0.001          # QPD sample rate [s] (1 ms)
     log_period: float = 0.001      # Data logging rate [s] (1 ms)
+    
+    # Visualization and execution
+    enable_visualization: bool = False  # Enable MuJoCo viewer
+    real_time_factor: float = 0.0       # 0.0 = fast-as-possible, 1.0 = real-time
+    viewer_fps: float = 30.0            # Viewer refresh rate [Hz]
     
     # Deterministic execution
     seed: int = 42
@@ -156,6 +162,9 @@ class DigitalTwinRunner:
         # Set deterministic seed
         self.rng = np.random.default_rng(config.seed)
         
+        # Threading lock for MuJoCo data access
+        self.mj_data_lock = threading.Lock()
+        
         # Initialize timing counters
         self.time: float = 0.0
         self.iteration: int = 0
@@ -198,15 +207,42 @@ class DigitalTwinRunner:
         For now, implements simplified rigid-body dynamics as placeholder.
         """
         # MuJoCo interface (placeholder - would use mujoco library)
-        self.use_mujoco = False  # Set to True when MuJoCo model is available
+        self.use_mujoco = True  # Set to True when MuJoCo model is available
         
         if self.use_mujoco:
-            # TODO: Load MuJoCo model
-            # import mujoco
-            # self.mj_model = mujoco.MjModel.from_xml_path("gimbal_cpa_model.xml")
-            # self.mj_data = mujoco.MjData(self.mj_model)
-            pass
-        else:
+            try:
+                import mujoco
+                from pathlib import Path
+                
+                # Robust path resolution relative to package root
+                # Assumes 'models' directory is at package root level
+                current_file = Path(__file__).resolve()
+                package_root = current_file.parent.parent.parent
+                model_path = package_root / "models" / "gimbal_cpa_model.xml"
+                
+                if not model_path.exists():
+                    raise FileNotFoundError(
+                        f"CRITICAL: MuJoCo model not found at expected path: {model_path}. "
+                        "Ensure the model description file exists."
+                    )
+                
+                # Load physics model and create data structure
+                self.mj_model = mujoco.MjModel.from_xml_path(str(model_path))
+                self.mj_data = mujoco.MjData(self.mj_model)
+                
+                # Create separate data structure for visualization to avoid threading conflicts
+                self.mj_data_vis = mujoco.MjData(self.mj_model)
+                
+                # Initialize viewer-related attributes
+                self.viewer = None
+                
+            except ImportError:
+                print("Warning: 'mujoco' library not installed. Falling back to simplified dynamics.")
+                self.use_mujoco = False
+            except Exception as e:
+                raise RuntimeError(f"Failed to initialize MuJoCo dynamics: {str(e)}") from e
+        
+        if not self.use_mujoco:
             # Simplified dynamics model
             self.inertia_az = 2.0  # kg·m²
             self.inertia_el = 1.5  # kg·m²
@@ -224,7 +260,7 @@ class DigitalTwinRunner:
         # Gimbal motors (Az/El)
         motor_config = self.config.motor_config or {
             'R': 2.0,
-            'L': 0.005,
+            'L': 0.05,  # Increased from 0.005 to prevent numerical instability
             'K_t': 0.5,
             'K_e': 0.5,
             'tau_max': 10.0,
@@ -381,15 +417,26 @@ class DigitalTwinRunner:
             Timestep [s]
         """
         if self.use_mujoco:
-            # MuJoCo integration
-            # self.mj_data.ctrl[0] = self.state.torque_az
-            # self.mj_data.ctrl[1] = self.state.torque_el
-            # mujoco.mj_step(self.mj_model, self.mj_data)
-            # self.q_az = self.mj_data.qpos[0]
-            # self.q_el = self.mj_data.qpos[1]
-            # self.qd_az = self.mj_data.qvel[0]
-            # self.qd_el = self.mj_data.qvel[1]
-            pass
+            with self.mj_data_lock:
+                # MuJoCo integration
+                self.mj_data.ctrl[0] = self.state.torque_az
+                self.mj_data.ctrl[1] = self.state.torque_el
+                
+                # Step physics forward
+                import mujoco
+                mujoco.mj_step(self.mj_model, self.mj_data)
+                
+                # Extract state
+                self.q_az = self.mj_data.qpos[0]
+                self.q_el = self.mj_data.qpos[1] 
+                self.qd_az = self.mj_data.qvel[0]
+                self.qd_el = self.mj_data.qvel[1]
+                
+                # Update state container
+                self.state.q_az = self.q_az
+                self.state.q_el = self.q_el
+                self.state.qd_az = self.qd_az
+                self.state.qd_el = self.qd_el
         else:
             # Simplified Euler integration
             # θ̈ = (τ - b·θ̇) / J
@@ -624,6 +671,40 @@ class DigitalTwinRunner:
             
             self.last_log_time = self.time
     
+    def run_single_step(self) -> SimulationState:
+        """
+        Execute a single simulation step across all subsystems.
+        
+        This method handles multi-rate execution, dynamics integration,
+        sensor sampling, estimation, and control updates for one dt_sim step.
+        """
+        # 1. Step dynamics forward
+        self._step_dynamics(self.config.dt_sim)
+        
+        # 2. Sample sensors (multi-rate)
+        self._sample_sensors()
+        
+        # 3. Update estimator and coarse controller (at coarse rate)
+        # Using epsilon for floating point comparison robustness
+        if (self.time - self.last_coarse_update) >= (self.config.dt_coarse - 1e-9):
+            self._update_estimator()
+            self._update_coarse_controller()
+            self.last_coarse_update = self.time
+        
+        # 4. Update fine controller (at fine rate)
+        if (self.time - self.last_fine_update) >= (self.config.dt_fine - 1e-9):
+            self._update_fine_controller()
+            self.last_fine_update = self.time
+        
+        # 5. Log data
+        self._log_data()
+        
+        # Increment internal time and iteration
+        self.iteration += 1
+        self.time = self.iteration * self.config.dt_sim
+        
+        return self.state
+
     def run_simulation(self, duration: float) -> Dict:
         """
         Execute the complete multi-rate closed-loop simulation.
@@ -631,14 +712,8 @@ class DigitalTwinRunner:
         This is the main entry point for running the digital twin. It orchestrates
         all subsystems in a fixed-step loop with proper timing separation.
         
-        Execution Order (each timestep):
-        -------------------------------
-        1. Step dynamics (apply forces, integrate EOM)
-        2. Sample sensors (at their respective rates)
-        3. Update estimator (at coarse rate)
-        4. Update coarse controller (at coarse rate)
-        5. Update fine controller (at fine rate)
-        6. Log data (at log rate)
+        CRITICAL: Ensures deterministic termination based on simulated time,
+        not viewer status or wall-clock time.
         
         Parameters
         ----------
@@ -655,45 +730,105 @@ class DigitalTwinRunner:
         print(f"  dt_coarse: {self.config.dt_coarse*1e3:.2f} ms")
         print(f"  dt_fine: {self.config.dt_fine*1e3:.2f} ms")
         print(f"  Target: Az={np.rad2deg(self.config.target_az):.2f}°, El={np.rad2deg(self.config.target_el):.2f}°")
+        print(f"  Visualization: {'Enabled' if self.config.enable_visualization else 'Disabled'}")
         
-        start_time = time.time()
+        # Initialize visualization if requested (OUTSIDE main loop)
+        viewer = None
+        if self.config.enable_visualization and self.use_mujoco:
+            try:
+                import mujoco.viewer
+                # Use the visualization data structure for the viewer
+                viewer = mujoco.viewer.launch_passive(self.mj_model, self.mj_data_vis)
+                print(f"  Viewer initialized at {self.config.viewer_fps:.0f} FPS")
+            except Exception as e:
+                print(f"Warning: Failed to initialize viewer: {e}")
+                viewer = None
         
-        # Main simulation loop
-        n_steps = int(duration / self.config.dt_sim)
+        # Timing setup
+        start_time = time.perf_counter()
+        last_viewer_update = 0.0
+        last_realtime_check = 0.0
+        viewer_dt = 1.0 / self.config.viewer_fps if self.config.viewer_fps > 0 else 0.1
         
-        for i in range(n_steps):
-            # Update time
-            self.time = i * self.config.dt_sim
-            self.iteration = i
-            
-            # 1. Step dynamics forward
-            self._step_dynamics(self.config.dt_sim)
-            
-            # 2. Sample sensors (multi-rate)
-            self._sample_sensors()
-            
-            # 3. Update estimator (at coarse rate)
-            if (self.time - self.last_coarse_update) >= self.config.dt_coarse:
-                self._update_estimator()
-                self._update_coarse_controller()
-                self.last_coarse_update = self.time
-            
-            # 4. Update fine controller (at fine rate)
-            if (self.time - self.last_fine_update) >= self.config.dt_fine:
-                self._update_fine_controller()
-                self.last_fine_update = self.time
-            
-            # 5. Log data
-            self._log_data()
-            
-            # Progress indicator
-            if i % (n_steps // 10) == 0 and i > 0:
-                progress = 100.0 * i / n_steps
-                print(f"  Progress: {progress:.0f}%")
+        # Reset internal time for fresh run
+        self.time = 0.0
+        self.iteration = 0
+        if self.use_mujoco:
+            self.mj_data.time = 0.0
+            # Reset visualization data to match
+            if hasattr(self, 'mj_data_vis'):
+                self.mj_data_vis.time = 0.0
         
-        elapsed_time = time.time() - start_time
-        print(f"Simulation complete in {elapsed_time:.2f} seconds")
-        print(f"  Real-time factor: {duration/elapsed_time:.1f}x")
+        try:
+            # CRITICAL: Main simulation loop with DETERMINISTIC TERMINATION
+            # Condition: simulated time < duration (NOT viewer status)
+            while True:
+                # Check termination condition: SIMULATED TIME ONLY
+                current_sim_time = self.mj_data.time if self.use_mujoco else self.time
+                if current_sim_time >= duration:
+                    break
+                
+                # Execute single simulation step
+                self.run_single_step()
+                
+                # NON-BLOCKING viewer update (if enabled)
+                if viewer is not None and (current_sim_time - last_viewer_update) >= viewer_dt:
+                    try:
+                        # Thread-safe copy of simulation data to visualization data
+                        with self.mj_data_lock:
+                            # Manual copy of key data fields since mj_copyData may not be available
+                            self.mj_data_vis.qpos[:] = self.mj_data.qpos[:]
+                            self.mj_data_vis.qvel[:] = self.mj_data.qvel[:]
+                            if hasattr(self.mj_data, 'act') and hasattr(self.mj_data_vis, 'act'):
+                                self.mj_data_vis.act[:] = self.mj_data.act[:]
+                            self.mj_data_vis.time = self.mj_data.time
+                        
+                        # Update viewer with copied state (thread-safe)
+                        viewer.sync()
+                        last_viewer_update = current_sim_time
+                        
+                        # Check if user closed viewer window (but don't terminate on this)
+                        # This is informational only - simulation continues regardless
+                        if not viewer.is_running():
+                            print("  Viewer closed by user (simulation continuing...)")
+                            viewer = None
+                    except Exception as e:
+                        # Viewer error - continue simulation without visualization
+                        print(f"  Viewer error: {e} (continuing without visualization)")
+                        viewer = None
+                
+                # Optional real-time constraint (for debugging, disabled for CI/MC)
+                if self.config.real_time_factor > 0 and (current_sim_time - last_realtime_check) >= 0.1:
+                    elapsed_wall = time.perf_counter() - start_time
+                    target_wall = current_sim_time / self.config.real_time_factor
+                    if elapsed_wall < target_wall:
+                        time.sleep(min(0.001, target_wall - elapsed_wall))  # Max 1ms sleep
+                    last_realtime_check = current_sim_time
+                
+                # Progress indicator
+                if self.iteration % max(1, int(duration / (self.config.dt_sim * 10))) == 0 and self.iteration > 0:
+                    progress = 100.0 * current_sim_time / duration
+                    print(f"  Progress: {progress:.0f}% (t={current_sim_time:.2f}s)")
+        
+        finally:
+            # CRITICAL: Cleanup - close viewer only after user closes it
+            if viewer is not None:
+                print("  Simulation complete. Close the viewer window to continue.")
+                try:
+                    while viewer.is_running():
+                        time.sleep(0.1)
+                    viewer.close()
+                    print("  Viewer closed by user")
+                except Exception:
+                    pass  # Ignore cleanup errors
+        
+        # Final metrics
+        elapsed_time = time.perf_counter() - start_time
+        final_sim_time = self.mj_data.time if self.use_mujoco else self.time
+        print(f"Simulation complete: {final_sim_time:.3f} simulated seconds")
+        print(f"  Wall-clock time: {elapsed_time:.2f} seconds")
+        print(f"  Real-time factor: {final_sim_time/elapsed_time:.1f}x")
+        print(f"  Total iterations: {self.iteration}")
         
         # Compute performance summary
         results = self._compute_summary()
@@ -806,7 +941,10 @@ def main():
         seed=42,
         target_az=np.deg2rad(5.0),   # 5° azimuth target
         target_el=np.deg2rad(30.0),  # 30° elevation target
-        target_enabled=True
+        target_enabled=True,
+        enable_visualization=False,  # Set to True to enable MuJoCo viewer
+        real_time_factor=0.0,        # 0.0 = fast-as-possible
+        viewer_fps=30.0              # 30 FPS when visualization enabled
     )
     
     # Create runner

@@ -119,10 +119,19 @@ class GimbalMotorModel:
         """
         # Electrical dynamics: di/dt = (V_cmd - R*i - K_e*omega) / L
         back_emf = self.K_e * omega_m
-        di_dt = (v_cmd - self.R * self.current - back_emf) / self.L
+        numerator = v_cmd - self.R * self.current - back_emf
+        # Prevent division by zero and numerical instability
+        L_safe = max(self.L, 1e-6)
+        di_dt = numerator / L_safe
+        
+        # Clamp di/dt to prevent overflow
+        di_dt = np.clip(di_dt, -1e7, 1e7)
         
         # Integrate current (Euler forward)
         self.current += di_dt * dt
+        
+        # Clamp current to reasonable range
+        self.current = np.clip(self.current, -1e3, 1e3)
         
         # Compute ideal torque from current
         tau_ideal = self.K_t * self.current
