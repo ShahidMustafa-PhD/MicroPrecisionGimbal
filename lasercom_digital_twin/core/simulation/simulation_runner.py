@@ -23,6 +23,7 @@ Data Flow:
 MuJoCo State → Sensors → Estimator → Controllers → Actuators → MuJoCo Forces
 """
 
+
 import numpy as np
 from typing import Dict, Optional, Tuple, List
 from dataclasses import dataclass, field
@@ -234,7 +235,7 @@ class DigitalTwinRunner:
                 self.mj_data_vis = mujoco.MjData(self.mj_model)
                 
                 # Initialize viewer-related attributes
-                self.viewer = None
+                #self.viewer = None
                 
             except ImportError:
                 print("Warning: 'mujoco' library not installed. Falling back to simplified dynamics.")
