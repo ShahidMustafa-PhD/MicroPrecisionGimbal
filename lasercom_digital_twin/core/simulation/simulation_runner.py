@@ -235,7 +235,7 @@ class DigitalTwinRunner:
                 self.mj_data_vis = mujoco.MjData(self.mj_model)
                 
                 # Initialize viewer-related attributes
-                #self.viewer = None
+                self.viewer = None
                 
             except ImportError:
                 print("Warning: 'mujoco' library not installed. Falling back to simplified dynamics.")
