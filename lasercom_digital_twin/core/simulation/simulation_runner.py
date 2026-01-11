@@ -771,6 +771,7 @@ class DigitalTwinRunner:
                 
                 # Execute single simulation step
                 self.run_single_step()
+                #lets work with mojoco
                 
                 # NON-BLOCKING viewer update (if enabled)
                 if viewer is not None and (current_sim_time - last_viewer_update) >= viewer_dt:
