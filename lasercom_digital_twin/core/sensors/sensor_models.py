@@ -138,7 +138,7 @@ class AbsoluteEncoder(SensorModel):
         # Add white noise
         noise = self.rng.normal(0.0, self.noise_rms)
         
-        # Add bias
+        # Add bias---
         measured = true_value + self.bias + noise
         
         # Apply quantization
