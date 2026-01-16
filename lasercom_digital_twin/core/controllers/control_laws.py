@@ -455,9 +455,203 @@ class CoarseGimbalController(BaseController):
             Controller state variables
         """
         return {
-            'integral': self.integral.copy(),
-            'previous_error': self.previous_error.copy(),
+                'integral': self.integral.copy(),
+                'previous_error': self.previous_error.copy(),
+                'previous_output': self.previous_output.copy(),
+                'saturated': self.saturation_active.copy(),
+                'filtered_reference': self.filtered_reference.copy()
+            }
+
+
+class FeedbackLinearizationController(BaseController):
+    """
+    Feedback Linearization Controller for a 2-DOF LaserCom Gimbal.
+    
+    This controller transforms the nonlinear dynamics into a linear system
+    by canceling out M(q), C(q, dq), G(q), and estimated disturbances.
+    
+    Signal Flow:
+    -----------
+    1. Sensors (encoders, gyros, QPD) → Raw measurements
+    2. State Estimator (EKF) → Filtered state + disturbance estimate
+    3. This Controller → Uses filtered state for feedback linearization
+    4. Output → Motor torque commands
+    
+    Control Law:
+    -----------
+    tau = M(q) * [ddq_ref + Kp*e + Kd*de] + C(q, dq)*dq + G(q) - d_hat
+    
+    where:
+    - M(q): Inertia matrix from dynamics model
+    - C(q, dq): Coriolis/centrifugal terms
+    - G(q): Gravity torque
+    - d_hat: Disturbance estimate from EKF
+    - e = q_ref - q: Position error
+    - de = dq_ref - dq: Velocity error
+    """
+
+    def __init__(self, config: dict, dynamics_model):
+        """
+        Initialize feedback linearization controller.
+        
+        Parameters
+        ----------
+        config : dict
+            Controller configuration:
+            - 'kp': Proportional gains [1/s²] (2-element for Az/El)
+            - 'kd': Derivative gains [1/s] 
+            - 'tau_max': Maximum torque [N·m]
+            - 'tau_min': Minimum torque [N·m]
+        dynamics_model : GimbalDynamics
+            Instance of the physics model from gimbal_dynamics.py
+            Must have methods: get_mass_matrix, get_coriolis_matrix, get_gravity_vector
+        """
+        super().__init__(config)
+        self.dyn = dynamics_model
+        
+        # PD Gains for the outer loop (linearized space)
+        self.kp = np.array(config.get('kp', [100.0, 100.0]))
+        self.kd = np.array(config.get('kd', [20.0, 20.0]))
+        
+        # Actuator limits
+        self.tau_max = np.array(config.get('tau_max', [10.0, 10.0]))
+        self.tau_min = np.array(config.get('tau_min', [-10.0, -10.0]))
+        
+        # State tracking
+        self.previous_output = np.zeros(2)
+        self.previous_error = np.zeros(2)
+
+    def compute_control(
+        self, 
+        q_ref: np.ndarray, 
+        dq_ref: np.ndarray,
+        state_estimate: Dict[str, float],
+        dt: float,
+        ddq_ref: Optional[np.ndarray] = None
+    ) -> Tuple[np.ndarray, Dict]:
+        """
+        Compute torque using Feedback Linearization.
+        
+        Signal Flow Explanation:
+        -----------------------
+        The state_estimate parameter comes from the Extended Kalman Filter (EKF)
+        in the estimators folder. The EKF fuses:
+        - Encoder measurements (absolute position)
+        - Gyroscope data (angular velocity)
+        - QPD measurements (fine pointing error)
+        
+        The EKF provides:
+        - Filtered joint positions (theta_az, theta_el)
+        - Filtered joint velocities (theta_dot_az, theta_dot_el)
+        - Disturbance estimates (dist_az, dist_el)
+        
+        This controller uses these filtered states to:
+        1. Cancel nonlinear dynamics (M, C, G terms)
+        2. Compensate estimated disturbances
+        3. Achieve linear closed-loop behavior
+        
+        Parameters
+        ----------
+        q_ref : np.ndarray
+            Desired joint positions [rad] (2-element: Az, El)
+        dq_ref : np.ndarray
+            Desired joint velocities [rad/s]
+        state_estimate : Dict
+            Filtered state from EKF containing:
+            - 'theta_az': Azimuth position [rad]
+            - 'theta_el': Elevation position [rad]
+            - 'theta_dot_az': Azimuth velocity [rad/s]
+            - 'theta_dot_el': Elevation velocity [rad/s]
+            - 'dist_az': Estimated disturbance torque on Az axis [N·m]
+            - 'dist_el': Estimated disturbance torque on El axis [N·m]
+        dt : float
+            Time step [s]
+        ddq_ref : Optional[np.ndarray]
+            Desired joint accelerations [rad/s²]. If None, assumes zero.
+            
+        Returns
+        -------
+        Tuple[np.ndarray, Dict]
+            - command: Commanded torque [N·m] (2-element)
+            - metadata: Dict with intermediate signals for logging
+        """
+        # Handle default acceleration reference
+        if ddq_ref is None:
+            ddq_ref = np.zeros(2)
+        
+        # 1. Extract estimated states from EKF
+        # The EKF in estimators/state_estimator.py provides these filtered estimates
+        q = np.array([
+            state_estimate['theta_az'], 
+            state_estimate['theta_el']
+        ])
+        dq = np.array([
+            state_estimate['theta_dot_az'], 
+            state_estimate['theta_dot_el']
+        ])
+        d_hat = np.array([
+            state_estimate['dist_az'], 
+            state_estimate['dist_el']
+        ])
+
+        # 2. Compute Linearizing Terms (Physics cancellation)
+        # These methods are from GimbalDynamics in dynamics/gimbal_dynamics.py
+        M = self.dyn.get_mass_matrix(q)
+        C = self.dyn.get_coriolis_matrix(q, dq)
+        G = self.dyn.get_gravity_vector(q)
+
+        # 3. Outer Loop: Define the desired acceleration in linearized space
+        error = q_ref - q
+        error_dot = dq_ref - dq
+        
+        # Virtual control input (desired acceleration in linearized coordinates)
+        # This is the "v" in the standard feedback linearization formulation
+        v = ddq_ref + self.kd * error_dot + self.kp * error
+
+        # 4. Nonlinear Inverse Dynamics
+        # Transform virtual control to actual torque by inverting the dynamics
+        # tau = M*v + C*dq + G - d_hat
+        # 
+        # Explanation:
+        # - M*v: Inertial torque needed for desired acceleration
+        # - C*dq: Compensation for Coriolis/centrifugal effects
+        # - G: Compensation for gravity torque
+        # - d_hat: Feedforward compensation for estimated disturbances
+        tau_linearizing = M @ v + C @ dq + G
+        tau_command = tau_linearizing - d_hat
+
+        # 5. Apply Actuator Saturation
+        u_saturated = np.clip(tau_command, self.tau_min, self.tau_max)
+        
+        # Update state
+        self.previous_output = u_saturated.copy()
+        self.previous_error = error.copy()
+        
+        # Metadata for logging and debugging
+        metadata = {
+            'error': error,
+            'error_dot': error_dot,
+            'v_signal': v,
+            'M_matrix': M,
+            'C_term': C @ dq,
+            'G_term': G,
+            'dist_compensated': d_hat,
+            'tau_unsaturated': tau_command,
+            'saturation_active': np.any(u_saturated != tau_command)
+        }
+
+        return u_saturated, metadata
+
+    def reset(self) -> None:
+        """Reset controller state."""
+        self.previous_output = np.zeros(2)
+        self.previous_error = np.zeros(2)
+
+    def get_state(self) -> Dict:
+        """Get current controller state."""
+        return {
+            'kp': self.kp.copy(),
+            'kd': self.kd.copy(),
             'previous_output': self.previous_output.copy(),
-            'saturated': self.saturation_active.copy(),
-            'filtered_reference': self.filtered_reference.copy()
+            'previous_error': self.previous_error.copy()
         }

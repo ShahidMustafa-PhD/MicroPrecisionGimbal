@@ -37,10 +37,14 @@ from lasercom_digital_twin.core.actuators.fsm_actuator import FSMActuatorModel
 from lasercom_digital_twin.core.sensors.sensor_models import AbsoluteEncoder, RateGyro
 from lasercom_digital_twin.core.sensors.quadrant_detector import QuadrantDetector
 from lasercom_digital_twin.core.estimators.state_estimator import PointingStateEstimator
-from lasercom_digital_twin.core.controllers.control_laws import CoarseGimbalController
+from lasercom_digital_twin.core.controllers.control_laws import (
+    CoarseGimbalController, 
+    FeedbackLinearizationController
+)
 from lasercom_digital_twin.core.controllers.fsm_controller import FSMController
 from lasercom_digital_twin.core.optics.optical_chain import TelescopeOptics, FocalPlanePosition
 from lasercom_digital_twin.core.coordinate_frames.transformations import OpticalFrameCompensator
+from lasercom_digital_twin.core.dynamics.gimbal_dynamics import GimbalDynamics
 
 
 @dataclass
@@ -69,7 +73,11 @@ class SimulationConfig:
     target_el: float = 0.5         # Target elevation [rad]
     target_enabled: bool = True
     
+    # Controller selection
+    use_feedback_linearization: bool = False  # Use FL controller instead of PID
+    
     # Component configs
+    dynamics_config: Dict = field(default_factory=dict)
     motor_config: Dict = field(default_factory=dict)
     fsm_config: Dict = field(default_factory=dict)
     encoder_config: Dict = field(default_factory=dict)
@@ -77,6 +85,7 @@ class SimulationConfig:
     qpd_config: Dict = field(default_factory=dict)
     estimator_config: Dict = field(default_factory=dict)
     coarse_controller_config: Dict = field(default_factory=dict)
+    feedback_linearization_config: Dict = field(default_factory=dict)
     fsm_controller_config: Dict = field(default_factory=dict)
     optics_config: Dict = field(default_factory=dict)
     frame_config: Dict = field(default_factory=dict)
@@ -362,18 +371,43 @@ class DigitalTwinRunner:
     
     def _init_controllers(self) -> None:
         """Initialize hierarchical control system."""
-        # Coarse gimbal controller (Level 1)
-        coarse_config = self.config.coarse_controller_config or {
-            'kp': 50.0,
-            'ki': 5.0,
-            'kd': 2.0,
-            'anti_windup_gain': 1.0,
-            'tau_rate_limit': 50.0,
-            'setpoint_filter_wn': 10.0,
-            'setpoint_filter_zeta': 0.7
+        # Initialize gimbal dynamics model (needed for feedback linearization)
+        dynamics_config = self.config.dynamics_config or {
+            'pan_mass': 0.5,
+            'tilt_mass': 0.25,
+            'cm_r': 0.02,
+            'cm_h': 0.005,
+            'gravity': 9.81
         }
+        self.gimbal_dynamics = GimbalDynamics(**dynamics_config)
         
-        self.coarse_controller = CoarseGimbalController(coarse_config)
+        # Select coarse controller type
+        if self.config.use_feedback_linearization:
+            # Feedback Linearization Controller
+            fl_config = self.config.feedback_linearization_config or {
+                'kp': [100.0, 100.0],
+                'kd': [20.0, 20.0],
+                'tau_max': [10.0, 10.0],
+                'tau_min': [-10.0, -10.0]
+            }
+            self.coarse_controller = FeedbackLinearizationController(
+                fl_config, 
+                self.gimbal_dynamics
+            )
+            print("INFO: Using Feedback Linearization Controller")
+        else:
+            # Coarse gimbal controller (Level 1) - Standard PID
+            coarse_config = self.config.coarse_controller_config or {
+                'kp': 50.0,
+                'ki': 5.0,
+                'kd': 2.0,
+                'anti_windup_gain': 1.0,
+                'tau_rate_limit': 50.0,
+                'setpoint_filter_wn': 10.0,
+                'setpoint_filter_zeta': 0.7
+            }
+            self.coarse_controller = CoarseGimbalController(coarse_config)
+            print("INFO: Using Standard PID Controller")
         
         # Fine FSM controller (Level 2)
         fsm_controller_config = self.config.fsm_controller_config or {
@@ -550,29 +584,54 @@ class DigitalTwinRunner:
         """
         Update coarse gimbal controller (Level 1).
         
+        Implements the signal flow architecture:
+        1. Get filtered state from EKF
+        2. Compute control (PID or Feedback Linearization)
+        3. Send torque commands to motors
+        
         Runs at coarse control rate (~10 Hz).
         """
         # Setpoints (target tracking)
         setpoint = np.array([self.config.target_az, self.config.target_el])
+        setpoint_vel = np.zeros(2)  # Assume stationary target
         
-        # Estimated state
+        # Estimated state from EKF (already updated)
         position_est = np.array([self.state.est_az, self.state.est_el])
         velocity_est = np.array([self.state.est_az_dot, self.state.est_el_dot])
         
-        # Compute control for both axes
-        tau_cmd, meta = self.coarse_controller.compute_control(
-            setpoint,
-            position_est,
-            self.config.dt_coarse,
-            velocity_estimate=velocity_est
-        )
+        # Compute control based on controller type
+        if self.config.use_feedback_linearization:
+            # Feedback Linearization Controller
+            # Get full state estimate dictionary from EKF
+            fused_state = self.estimator.get_fused_state()
+            
+            tau_cmd, meta = self.coarse_controller.compute_control(
+                q_ref=setpoint,
+                dq_ref=setpoint_vel,
+                state_estimate=fused_state,
+                dt=self.config.dt_coarse,
+                ddq_ref=None  # Assume zero acceleration reference
+            )
+            
+            # For FSM feedforward, use tracking error from metadata
+            residual_error = meta.get('error', setpoint - position_est)
+        else:
+            # Standard PID Controller
+            tau_cmd, meta = self.coarse_controller.compute_control(
+                setpoint,
+                position_est,
+                self.config.dt_coarse,
+                velocity_estimate=velocity_est
+            )
+            
+            # Get residual error for FSM feedforward
+            residual_error = self.coarse_controller.get_residual_error_for_fsm(
+                setpoint, position_est
+            )
         
         # Extract Az/El torques
         tau_az = tau_cmd[0]
         tau_el = tau_cmd[1]
-        
-        # Get residual error for FSM feedforward
-        residual_error = self.coarse_controller.get_residual_error_for_fsm(setpoint, position_est)
         
         # Store for FSM controller
         self.coarse_residual = residual_error
@@ -985,5 +1044,158 @@ def main():
     return results
 
 
+def main_feedback_linearization():
+    """
+    Demonstration of Feedback Linearization Controller.
+    
+    This demo showcases the complete signal flow architecture:
+    ┌─────────────────────────────────────────────────────────────┐
+    │                    SENSOR LAYER                              │
+    │  (sensors/encoder.py, sensors/gyro.py, sensors/qpd.py)     │
+    └────────────────┬────────────────────────────────────────────┘
+                     │ Raw Measurements:
+                     │ - Encoder: θ_az, θ_el (noisy position)
+                     │ - Gyro: ω_az, ω_el (noisy angular velocity)
+                     │ - QPD: Δθ_fine (optical pointing error)
+                     ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                   ESTIMATOR LAYER                            │
+    │           (estimators/state_estimator.py)                   │
+    │  Extended Kalman Filter fuses all sensor data               │
+    └────────────────┬────────────────────────────────────────────┘
+                     │ Filtered State Dictionary
+                     ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                  CONTROLLER LAYER                            │
+    │  FeedbackLinearizationController receives state_estimate    │
+    │  Cancels M(q), C(q,dq), G(q), compensates disturbances     │
+    └────────────────┬────────────────────────────────────────────┘
+                     │ Torque Commands [N·m]
+                     ▼
+    ┌─────────────────────────────────────────────────────────────┐
+    │                   ACTUATOR LAYER                             │
+    │              (actuators/motor_model.py)                      │
+    └─────────────────────────────────────────────────────────────┘
+    
+    Runs a 10-second closed-loop simulation with aggressive target tracking.
+    """
+    print("=" * 70)
+    print("Laser Communication Terminal Digital Twin")
+    print("FEEDBACK LINEARIZATION CONTROLLER DEMONSTRATION")
+    print("=" * 70)
+    print()
+    print("Signal Flow Architecture:")
+    print("  Sensors → Estimator (EKF) → FL Controller → Actuators")
+    print()
+    
+    # Configure simulation with Feedback Linearization
+    config = SimulationConfig(
+        dt_sim=0.001,        # 1 ms physics timestep
+        dt_coarse=0.010,     # 10 ms coarse control
+        dt_fine=0.001,       # 1 ms fine control
+        log_period=0.001,    # 1 ms logging
+        seed=42,
+        target_az=np.deg2rad(10.0),   # 10° azimuth target (aggressive)
+        target_el=np.deg2rad(45.0),   # 45° elevation target (aggressive)
+        target_enabled=True,
+        use_feedback_linearization=True,  # Enable FL controller
+        enable_visualization=False,
+        real_time_factor=0.0,
+        viewer_fps=30.0,
+        
+        # Feedback Linearization gains
+        feedback_linearization_config={
+            'kp': [150.0, 150.0],      # Higher gains possible due to linearization
+            'kd': [30.0, 30.0],
+            'tau_max': [10.0, 10.0],
+            'tau_min': [-10.0, -10.0]
+        },
+        
+        # Gimbal dynamics parameters
+        dynamics_config={
+            'pan_mass': 0.5,
+            'tilt_mass': 0.25,
+            'cm_r': 0.02,
+            'cm_h': 0.005,
+            'gravity': 9.81
+        }
+    )
+    
+    # Create runner
+    print("Initializing simulation...")
+    runner = DigitalTwinRunner(config)
+    print("  ✓ Dynamics model initialized")
+    print("  ✓ Sensors initialized (encoders, gyros, QPD)")
+    print("  ✓ EKF state estimator initialized")
+    print("  ✓ Feedback Linearization controller initialized")
+    print("  ✓ Motor and FSM actuators initialized")
+    print()
+    
+    # Run simulation
+    print("Running closed-loop simulation (10 seconds)...")
+    results = runner.run_simulation(duration=10.0)
+    
+    # Print detailed summary
+    print()
+    print("=" * 70)
+    print("FEEDBACK LINEARIZATION CONTROLLER RESULTS")
+    print("=" * 70)
+    print(f"Duration:          {results['duration']:.3f} s")
+    print(f"Samples logged:    {results['n_samples']}")
+    print(f"Controller:        Feedback Linearization")
+    print()
+    print("POINTING PERFORMANCE:")
+    print(f"  LOS Error RMS:   {results['los_error_rms']*1e6:.2f} µrad")
+    print(f"  LOS Error Final: {results['los_error_final']*1e6:.2f} µrad")
+    print(f"  LOS Error X RMS: {results['los_error_rms_x']*1e6:.2f} µrad")
+    print(f"  LOS Error Y RMS: {results['los_error_rms_y']*1e6:.2f} µrad")
+    print()
+    print("ESTIMATION PERFORMANCE:")
+    print(f"  State Est. RMS:  {results['est_error_rms']*1e6:.2f} µrad")
+    print()
+    print("CONTROL EFFORT:")
+    print(f"  Torque Az RMS:   {results['torque_rms_az']:.3f} N·m")
+    print(f"  Torque El RMS:   {results['torque_rms_el']:.3f} N·m")
+    print(f"  FSM Saturation:  {results['fsm_saturation_percent']:.1f}%")
+    print()
+    print("FINAL STATE:")
+    print(f"  Target Az:       {np.rad2deg(config.target_az):.3f}°")
+    print(f"  Target El:       {np.rad2deg(config.target_el):.3f}°")
+    print(f"  Actual Az:       {np.rad2deg(results['final_az']):.3f}°")
+    print(f"  Actual El:       {np.rad2deg(results['final_el']):.3f}°")
+    print(f"  Az Error:        {np.rad2deg(config.target_az - results['final_az'])*3600:.2f} arcsec")
+    print(f"  El Error:        {np.rad2deg(config.target_el - results['final_el'])*3600:.2f} arcsec")
+    print()
+    print("NOTES:")
+    print("  - Feedback Linearization cancels nonlinear dynamics (M, C, G)")
+    print("  - EKF estimates and compensates disturbances")
+    print("  - Higher control gains are stable due to linearization")
+    print("  - See log_data in results for time-series plots")
+    print("=" * 70)
+    
+    return results
+
+
 if __name__ == '__main__':
-    results = main()
+    # Run standard PID demonstration
+    print("\n### Running Standard PID Controller Demo ###\n")
+    results_pid = main()
+    
+    print("\n\n")
+    
+    # Run Feedback Linearization demonstration
+    print("### Running Feedback Linearization Controller Demo ###\n")
+    results_fl = main_feedback_linearization()
+    
+    # Comparison
+    print("\n\n")
+    print("=" * 70)
+    print("CONTROLLER COMPARISON")
+    print("=" * 70)
+    print(f"{'Metric':<30} {'PID':<15} {'FL':<15}")
+    print("-" * 70)
+    print(f"{'LOS Error RMS (µrad)':<30} {results_pid['los_error_rms']*1e6:<15.2f} {results_fl['los_error_rms']*1e6:<15.2f}")
+    print(f"{'Torque Az RMS (N·m)':<30} {results_pid['torque_rms_az']:<15.3f} {results_fl['torque_rms_az']:<15.3f}")
+    print(f"{'Torque El RMS (N·m)':<30} {results_pid['torque_rms_el']:<15.3f} {results_fl['torque_rms_el']:<15.3f}")
+    print(f"{'FSM Saturation (%)':<30} {results_pid['fsm_saturation_percent']:<15.1f} {results_fl['fsm_saturation_percent']:<15.1f}")
+    print("=" * 70)
