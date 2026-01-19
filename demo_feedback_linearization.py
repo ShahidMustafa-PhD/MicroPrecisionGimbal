@@ -72,7 +72,7 @@ def run_comparison_study():
     # Common parameters
     target_az_deg = 15.0
     target_el_deg = 40.0
-    duration = 5.0
+    duration = 1.0
     
     print(f"Test Conditions:")
     print(f"  - Target: Az={target_az_deg:.1f}°, El={target_el_deg:.1f}°")
@@ -101,7 +101,7 @@ def run_comparison_study():
         real_time_factor=0.0,
         coarse_controller_config={
             'kp': 50.0,
-            'ki': 5.0,
+            'ki': 10.0,
             'kd': 2.0,
             'anti_windup_gain': 1.0,
             'tau_rate_limit': 50.0
@@ -141,8 +141,8 @@ def run_comparison_study():
         dynamics_config={
             'pan_mass': 0.5,
             'tilt_mass': 0.25,
-            'cm_r': 0.02,
-            'cm_h': 0.005,
+            'cm_r': 0.0002,
+            'cm_h': 0.0005,
             'gravity': 9.81
         }
     )

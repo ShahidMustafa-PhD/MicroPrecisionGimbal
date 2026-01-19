@@ -185,6 +185,30 @@ class DigitalTwinRunner:
         self.last_qpd_update: float = 0.0
         self.last_log_time: float = 0.0
         
+        # Set physical parameters from config
+        self.pan_mass = getattr(config, 'pan_mass', 0.5)
+        self.tilt_mass = getattr(config, 'tilt_mass', 0.25)
+        self.cm_r = getattr(config, 'cm_r', 0.002)
+        self.cm_h = getattr(config, 'cm_h', 0.005)
+        self.gravity = getattr(config, 'gravity', 9.81)
+        self.friction_az = getattr(config, 'friction_az', 0.1)
+        self.friction_el = getattr(config, 'friction_el', 0.1)
+        
+        # Initialize GimbalDynamics
+        self.dynamics = GimbalDynamics(
+            pan_mass=self.pan_mass,
+            tilt_mass=self.tilt_mass,
+            cm_r=self.cm_r,
+            cm_h=self.cm_h,
+            gravity=self.gravity
+        )
+        
+        # Compute inertias from mass matrix at zero position (q=0)
+        # For a 2-DOF gimbal, inertia_az = M[0,0] and inertia_el = M[1,1] at q=0
+        M_at_zero = self.dynamics.get_mass_matrix(np.zeros(2))  # Mass matrix at [0, 0]
+        self.inertia_az = M_at_zero[0, 0]  # Azimuth inertia [kg·m²]
+        self.inertia_el = M_at_zero[1, 1]  # Elevation inertia [kg·m²]
+
         # Initialize MuJoCo or placeholder dynamics
         self._init_dynamics()
         
@@ -217,7 +241,7 @@ class DigitalTwinRunner:
         For now, implements simplified rigid-body dynamics as placeholder.
         """
         # MuJoCo interface (placeholder - would use mujoco library)
-        self.use_mujoco = True  # Set to True when MuJoCo model is available
+        self.use_mujoco = False  # Set to True when MuJoCo model is available
         
         if self.use_mujoco:
             try:
@@ -254,8 +278,8 @@ class DigitalTwinRunner:
         
         if not self.use_mujoco:
             # Simplified dynamics model
-            self.inertia_az = 2.0  # kg·m²
-            self.inertia_el = 1.5  # kg·m²
+            self.inertia_az = 0.20  # kg·m²
+            self.inertia_el = 0.15  # kg·m²
             self.friction_az = 0.05  # N·m·s/rad
             self.friction_el = 0.05  # N·m·s/rad
             
@@ -473,18 +497,43 @@ class DigitalTwinRunner:
                 self.state.qd_az = self.qd_az
                 self.state.qd_el = self.qd_el
         else:
-            # Simplified Euler integration
-            # θ̈ = (τ - b·θ̇) / J
-            accel_az = (self.state.torque_az - self.friction_az * self.qd_az) / self.inertia_az
-            accel_el = (self.state.torque_el - self.friction_el * self.qd_el) / self.inertia_el
+            # -----------------------------------------------------------
+            # High-Fidelity Coupled Dynamics (Lagrangian Formulation)
+            # -----------------------------------------------------------
+            # Solves: M(q)q̈ + C(q,q̇)q̇ + G(q) = τ_net
+            # where τ_net = τ_motor - D·q̇ (Friction)
+
+            # 1. State Vectors
+            q = np.array([self.q_az, self.q_el])
+            dq = np.array([self.qd_az, self.qd_el])
             
-            # Integrate
-            self.qd_az += accel_az * dt
-            self.qd_el += accel_el * dt
+            # 2. Input Torques (with Friction Compensation)
+            # GimbalDynamics expects the net torque (or handles G internally? No, G is in LHS)
+            # compute_forward_dynamics solves M*qdd = tau - C*dq - G
+            # We supply tau = tau_motor - Friction
+            tau_motor = np.array([self.state.torque_az, self.state.torque_el])
+            tau_friction = np.array([
+                self.friction_az * self.qd_az,
+                self.friction_el * self.qd_el
+            ])
+            tau_net = tau_motor - tau_friction
+
+            # 3. Compute Accelerations via Inverted Mass Matrix
+            # q̈ = M⁻¹(τ_net - C·q̇ - G)
+            q_dd = self.dynamics.compute_forward_dynamics(q, dq, tau_net)
+
+            # 4. Numerical Integration (Semi-Implicit / Symplectic Euler)
+            # Preferred for Hamiltonian systems/mechanical stability
+            
+            # Update Velocities first
+            self.qd_az += q_dd[0] * dt
+            self.qd_el += q_dd[1] * dt
+            
+            # Update Positions using new Velocities
             self.q_az += self.qd_az * dt
             self.q_el += self.qd_el * dt
             
-            # Update state container
+            # 5. Update Simulation State
             self.state.q_az = self.q_az
             self.state.q_el = self.q_el
             self.state.qd_az = self.qd_az
@@ -893,7 +942,7 @@ class DigitalTwinRunner:
         
         # Compute performance summary
         results = self._compute_summary()
-        
+        self.plot_results()
         return results
     
     def _compute_summary(self) -> Dict:
@@ -943,6 +992,374 @@ class DigitalTwinRunner:
         }
         
         return summary
+    
+    def plot_results(self) -> None:
+        """
+        Generate high-fidelity diagnostic plots for closed-loop simulation telemetry.
+        
+        Creates separate figures for each subsystem:
+        - Figure 1: Gimbal Position (q_az, q_el with commands)
+        - Figure 2: Gimbal Velocity (qd_az, qd_el)
+        - Figure 3: Control Torques (torque_az, torque_el)
+        - Figure 4: FSM State (fsm_tip, fsm_tilt, fsm_cmd_tip, fsm_cmd_tilt)
+        - Figure 5: Sensor Measurements (encoders, gyros)
+        - Figure 6: QPD Measurements (z_qpd_nes_x, z_qpd_nes_y)
+        - Figure 7: LOS Errors (los_error_x, los_error_y, total)
+        - Figure 8: Estimated State (est_az, est_el, est_az_dot, est_el_dot)
+        
+        Suitable for design reviews, performance validation, and control tuning.
+        """
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print("Warning: matplotlib not installed. Cannot generate plots.")
+            return
+        
+        # Check if data exists
+        if not self.log_data or len(self.log_data.get('time', [])) == 0:
+            print("Warning: No simulation data to plot. Run simulation first.")
+            return
+        
+        # Extract time-series data (vectorized for efficiency)
+        t = np.array(self.log_data['time'])
+        
+        # Color scheme
+        color_az = '#1f77b4'    # Blue
+        color_el = '#d62728'    # Red
+        color_cmd = '#2ca02c'   # Green
+        color_x = '#ff7f0e'     # Orange
+        color_y = '#9467bd'     # Purple
+        
+        # ===================================================================
+        # FIGURE 1: Gimbal Position (q_az, q_el with commands)
+        # ===================================================================
+        fig1, (ax1a, ax1b) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+        
+        # Azimuth Position
+        ax1a.plot(t, np.rad2deg(np.array(self.log_data['q_az'])), 
+                  color=color_az, linewidth=2, label='q_az Actual', alpha=0.9)
+        ax1a.plot(t, np.rad2deg(np.array(self.log_data['target_az'])), 
+                  color=color_cmd, linewidth=1.5, linestyle='--', label='q_az Command', alpha=0.7)
+        ax1a.set_ylabel('Azimuth Angle [deg]', fontsize=11, fontweight='bold')
+        ax1a.set_title('Gimbal Azimuth Position', fontsize=12, fontweight='bold')
+        ax1a.legend(loc='best', fontsize=9)
+        ax1a.grid(True, alpha=0.3, linestyle=':')
+        
+        # Elevation Position
+        ax1b.plot(t, np.rad2deg(np.array(self.log_data['q_el'])), 
+                  color=color_el, linewidth=2, label='q_el Actual', alpha=0.9)
+        ax1b.plot(t, np.rad2deg(np.array(self.log_data['target_el'])), 
+                  color=color_cmd, linewidth=1.5, linestyle='--', label='q_el Command', alpha=0.7)
+        ax1b.set_ylabel('Elevation Angle [deg]', fontsize=11, fontweight='bold')
+        ax1b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
+        ax1b.set_title('Gimbal Elevation Position', fontsize=12, fontweight='bold')
+        ax1b.legend(loc='best', fontsize=9)
+        ax1b.grid(True, alpha=0.3, linestyle=':')
+        
+        fig1.suptitle('Gimbal Position Tracking', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        # ===================================================================
+        # FIGURE 2: Gimbal Velocity (qd_az, qd_el)
+        # ===================================================================
+        fig2, (ax2a, ax2b) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+        
+        # Azimuth Velocity
+        ax2a.plot(t, np.rad2deg(np.array(self.log_data['qd_az'])), 
+                  color=color_az, linewidth=1.5, label='qd_az', alpha=0.9)
+        ax2a.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax2a.set_ylabel('Azimuth Rate [deg/s]', fontsize=11, fontweight='bold')
+        ax2a.set_title('Gimbal Azimuth Velocity', fontsize=12, fontweight='bold')
+        ax2a.legend(loc='best', fontsize=9)
+        ax2a.grid(True, alpha=0.3, linestyle=':')
+        
+        # Elevation Velocity
+        ax2b.plot(t, np.rad2deg(np.array(self.log_data['qd_el'])), 
+                  color=color_el, linewidth=1.5, label='qd_el', alpha=0.9)
+        ax2b.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax2b.set_ylabel('Elevation Rate [deg/s]', fontsize=11, fontweight='bold')
+        ax2b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
+        ax2b.set_title('Gimbal Elevation Velocity', fontsize=12, fontweight='bold')
+        ax2b.legend(loc='best', fontsize=9)
+        ax2b.grid(True, alpha=0.3, linestyle=':')
+        
+        fig2.suptitle('Gimbal Angular Velocities', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        # ===================================================================
+        # FIGURE 3: Control Torques (torque_az, torque_el)
+        # ===================================================================
+        fig3, (ax3a, ax3b) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+        
+        tau_max = 10.0  # From motor config
+        
+        # Azimuth Torque
+        ax3a.plot(t, np.array(self.log_data['torque_az']), 
+                  color=color_az, linewidth=1.5, label='torque_az', alpha=0.9)
+        ax3a.axhline(tau_max, color='red', linewidth=1.0, linestyle=':', 
+                     alpha=0.6, label='Saturation Limit')
+        ax3a.axhline(-tau_max, color='red', linewidth=1.0, linestyle=':', alpha=0.6)
+        ax3a.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax3a.set_ylabel('Azimuth Torque [N·m]', fontsize=11, fontweight='bold')
+        ax3a.set_title('Azimuth Motor Control Effort', fontsize=12, fontweight='bold')
+        ax3a.legend(loc='best', fontsize=9)
+        ax3a.grid(True, alpha=0.3, linestyle=':')
+        
+        # Elevation Torque
+        ax3b.plot(t, np.array(self.log_data['torque_el']), 
+                  color=color_el, linewidth=1.5, label='torque_el', alpha=0.9)
+        ax3b.axhline(tau_max, color='red', linewidth=1.0, linestyle=':', 
+                     alpha=0.6, label='Saturation Limit')
+        ax3b.axhline(-tau_max, color='red', linewidth=1.0, linestyle=':', alpha=0.6)
+        ax3b.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax3b.set_ylabel('Elevation Torque [N·m]', fontsize=11, fontweight='bold')
+        ax3b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
+        ax3b.set_title('Elevation Motor Control Effort', fontsize=12, fontweight='bold')
+        ax3b.legend(loc='best', fontsize=9)
+        ax3b.grid(True, alpha=0.3, linestyle=':')
+        
+        fig3.suptitle('Motor Control Torques', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        # ===================================================================
+        # FIGURE 4: FSM State (fsm_tip, fsm_tilt, commands, saturation)
+        # ===================================================================
+        fig4, ((ax4a, ax4b), (ax4c, ax4d)) = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
+        
+        fsm_max = 10000  # 10 mrad = 10000 µrad
+        
+        # FSM Tip Position
+        ax4a.plot(t, np.array(self.log_data['fsm_tip']) * 1e6, 
+                  color=color_az, linewidth=1.5, label='fsm_tip', alpha=0.9)
+        ax4a.axhline(fsm_max, color='orange', linewidth=1.0, linestyle=':', 
+                     alpha=0.6, label='FSM Limit')
+        ax4a.axhline(-fsm_max, color='orange', linewidth=1.0, linestyle=':', alpha=0.6)
+        ax4a.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax4a.set_ylabel('Tip Angle [µrad]', fontsize=10, fontweight='bold')
+        ax4a.set_title('FSM Tip Position', fontsize=11, fontweight='bold')
+        ax4a.legend(loc='best', fontsize=8)
+        ax4a.grid(True, alpha=0.3, linestyle=':')
+        
+        # FSM Tilt Position
+        ax4b.plot(t, np.array(self.log_data['fsm_tilt']) * 1e6, 
+                  color=color_el, linewidth=1.5, label='fsm_tilt', alpha=0.9)
+        ax4b.axhline(fsm_max, color='orange', linewidth=1.0, linestyle=':', 
+                     alpha=0.6, label='FSM Limit')
+        ax4b.axhline(-fsm_max, color='orange', linewidth=1.0, linestyle=':', alpha=0.6)
+        ax4b.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax4b.set_ylabel('Tilt Angle [µrad]', fontsize=10, fontweight='bold')
+        ax4b.set_title('FSM Tilt Position', fontsize=11, fontweight='bold')
+        ax4b.legend(loc='best', fontsize=8)
+        ax4b.grid(True, alpha=0.3, linestyle=':')
+        
+        # FSM Tip Command
+        ax4c.plot(t, np.array(self.log_data['fsm_cmd_tip']) * 1e6, 
+                  color=color_cmd, linewidth=1.5, label='fsm_cmd_tip', alpha=0.9)
+        ax4c.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax4c.set_ylabel('Tip Command [µrad]', fontsize=10, fontweight='bold')
+        ax4c.set_xlabel('Time [s]', fontsize=10, fontweight='bold')
+        ax4c.set_title('FSM Tip Command', fontsize=11, fontweight='bold')
+        ax4c.legend(loc='best', fontsize=8)
+        ax4c.grid(True, alpha=0.3, linestyle=':')
+        
+        # FSM Tilt Command
+        ax4d.plot(t, np.array(self.log_data['fsm_cmd_tilt']) * 1e6, 
+                  color=color_cmd, linewidth=1.5, label='fsm_cmd_tilt', alpha=0.9)
+        ax4d.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax4d.set_ylabel('Tilt Command [µrad]', fontsize=10, fontweight='bold')
+        ax4d.set_xlabel('Time [s]', fontsize=10, fontweight='bold')
+        ax4d.set_title('FSM Tilt Command', fontsize=11, fontweight='bold')
+        ax4d.legend(loc='best', fontsize=8)
+        ax4d.grid(True, alpha=0.3, linestyle=':')
+        
+        fig4.suptitle('Fast Steering Mirror State and Commands', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        # ===================================================================
+        # FIGURE 5: Sensor Measurements - Encoders and Gyros
+        # ===================================================================
+        fig5, ((ax5a, ax5b), (ax5c, ax5d)) = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
+        
+        # Encoder Azimuth
+        ax5a.plot(t, np.rad2deg(np.array(self.log_data['z_enc_az'])), 
+                  color=color_az, linewidth=1.5, label='z_enc_az', alpha=0.9)
+        ax5a.set_ylabel('Azimuth [deg]', fontsize=10, fontweight='bold')
+        ax5a.set_title('Encoder Azimuth Measurement', fontsize=11, fontweight='bold')
+        ax5a.legend(loc='best', fontsize=8)
+        ax5a.grid(True, alpha=0.3, linestyle=':')
+        
+        # Encoder Elevation
+        ax5b.plot(t, np.rad2deg(np.array(self.log_data['z_enc_el'])), 
+                  color=color_el, linewidth=1.5, label='z_enc_el', alpha=0.9)
+        ax5b.set_ylabel('Elevation [deg]', fontsize=10, fontweight='bold')
+        ax5b.set_title('Encoder Elevation Measurement', fontsize=11, fontweight='bold')
+        ax5b.legend(loc='best', fontsize=8)
+        ax5b.grid(True, alpha=0.3, linestyle=':')
+        
+        # Gyro Azimuth
+        ax5c.plot(t, np.rad2deg(np.array(self.log_data['z_gyro_az'])), 
+                  color=color_az, linewidth=1.5, label='z_gyro_az', alpha=0.9)
+        ax5c.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax5c.set_ylabel('Azimuth Rate [deg/s]', fontsize=10, fontweight='bold')
+        ax5c.set_xlabel('Time [s]', fontsize=10, fontweight='bold')
+        ax5c.set_title('Gyro Azimuth Measurement', fontsize=11, fontweight='bold')
+        ax5c.legend(loc='best', fontsize=8)
+        ax5c.grid(True, alpha=0.3, linestyle=':')
+        
+        # Gyro Elevation
+        ax5d.plot(t, np.rad2deg(np.array(self.log_data['z_gyro_el'])), 
+                  color=color_el, linewidth=1.5, label='z_gyro_el', alpha=0.9)
+        ax5d.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax5d.set_ylabel('Elevation Rate [deg/s]', fontsize=10, fontweight='bold')
+        ax5d.set_xlabel('Time [s]', fontsize=10, fontweight='bold')
+        ax5d.set_title('Gyro Elevation Measurement', fontsize=11, fontweight='bold')
+        ax5d.legend(loc='best', fontsize=8)
+        ax5d.grid(True, alpha=0.3, linestyle=':')
+        
+        fig5.suptitle('Encoder and Gyro Sensor Measurements', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        # ===================================================================
+        # FIGURE 6: QPD Measurements (z_qpd_nes_x, z_qpd_nes_y)
+        # ===================================================================
+        fig6, (ax6a, ax6b) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+        
+        # QPD X (NES)
+        ax6a.plot(t, np.array(self.log_data['z_qpd_nes_x']), 
+                  color=color_x, linewidth=1.5, label='z_qpd_nes_x', alpha=0.9)
+        ax6a.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax6a.set_ylabel('NES X', fontsize=11, fontweight='bold')
+        ax6a.set_title('QPD X-Axis Measurement', fontsize=12, fontweight='bold')
+        ax6a.legend(loc='best', fontsize=9)
+        ax6a.grid(True, alpha=0.3, linestyle=':')
+        
+        # QPD Y (NES)
+        ax6b.plot(t, np.array(self.log_data['z_qpd_nes_y']), 
+                  color=color_y, linewidth=1.5, label='z_qpd_nes_y', alpha=0.9)
+        ax6b.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax6b.set_ylabel('NES Y', fontsize=11, fontweight='bold')
+        ax6b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
+        ax6b.set_title('QPD Y-Axis Measurement', fontsize=12, fontweight='bold')
+        ax6b.legend(loc='best', fontsize=9)
+        ax6b.grid(True, alpha=0.3, linestyle=':')
+        
+        fig6.suptitle('Quadrant Photo Detector (QPD) Measurements', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        # ===================================================================
+        # FIGURE 7: LOS Errors (los_error_x, los_error_y, total)
+        # ===================================================================
+        fig7, (ax7a, ax7b, ax7c) = plt.subplots(3, 1, figsize=(12, 10), sharex=True)
+        
+        los_err_x = np.array(self.log_data['los_error_x'])
+        los_err_y = np.array(self.log_data['los_error_y'])
+        los_err_total = np.sqrt(los_err_x**2 + los_err_y**2)
+        
+        # LOS Error X
+        ax7a.plot(t, los_err_x * 1e6, 
+                  color=color_x, linewidth=1.5, label='los_error_x', alpha=0.9)
+        ax7a.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax7a.set_ylabel('LOS Error X [µrad]', fontsize=11, fontweight='bold')
+        ax7a.set_title('Line-of-Sight Error X-Axis', fontsize=12, fontweight='bold')
+        ax7a.legend(loc='best', fontsize=9)
+        ax7a.grid(True, alpha=0.3, linestyle=':')
+        
+        # LOS Error Y
+        ax7b.plot(t, los_err_y * 1e6, 
+                  color=color_y, linewidth=1.5, label='los_error_y', alpha=0.9)
+        ax7b.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax7b.set_ylabel('LOS Error Y [µrad]', fontsize=11, fontweight='bold')
+        ax7b.set_title('Line-of-Sight Error Y-Axis', fontsize=12, fontweight='bold')
+        ax7b.legend(loc='best', fontsize=9)
+        ax7b.grid(True, alpha=0.3, linestyle=':')
+        
+        # Total LOS Error
+        ax7c.plot(t, los_err_total * 1e6, 
+                  color='black', linewidth=2, label='Total LOS Error', alpha=0.9)
+        ax7c.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax7c.set_ylabel('Total LOS Error [µrad]', fontsize=11, fontweight='bold')
+        ax7c.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
+        ax7c.set_title('Total Line-of-Sight Error Magnitude', fontsize=12, fontweight='bold')
+        ax7c.legend(loc='best', fontsize=9)
+        ax7c.grid(True, alpha=0.3, linestyle=':')
+        
+        # Add RMS metric to title
+        rms_los = np.sqrt(np.mean(los_err_x**2 + los_err_y**2)) * 1e6
+        fig7.suptitle(f'Line-of-Sight Pointing Errors (RMS: {rms_los:.2f} µrad)', 
+                      fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        # ===================================================================
+        # FIGURE 8: Estimated State (est_az, est_el, est_az_dot, est_el_dot)
+        # ===================================================================
+        fig8, ((ax8a, ax8b), (ax8c, ax8d)) = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
+        
+        # Estimated Azimuth Position
+        ax8a.plot(t, np.rad2deg(np.array(self.log_data['est_az'])), 
+                  color=color_az, linewidth=1.5, label='est_az', alpha=0.9)
+        ax8a.plot(t, np.rad2deg(np.array(self.log_data['q_az'])), 
+                  color=color_az, linewidth=1.0, linestyle='--', label='q_az (true)', alpha=0.5)
+        ax8a.set_ylabel('Azimuth [deg]', fontsize=10, fontweight='bold')
+        ax8a.set_title('Estimated Azimuth Position', fontsize=11, fontweight='bold')
+        ax8a.legend(loc='best', fontsize=8)
+        ax8a.grid(True, alpha=0.3, linestyle=':')
+        
+        # Estimated Elevation Position
+        ax8b.plot(t, np.rad2deg(np.array(self.log_data['est_el'])), 
+                  color=color_el, linewidth=1.5, label='est_el', alpha=0.9)
+        ax8b.plot(t, np.rad2deg(np.array(self.log_data['q_el'])), 
+                  color=color_el, linewidth=1.0, linestyle='--', label='q_el (true)', alpha=0.5)
+        ax8b.set_ylabel('Elevation [deg]', fontsize=10, fontweight='bold')
+        ax8b.set_title('Estimated Elevation Position', fontsize=11, fontweight='bold')
+        ax8b.legend(loc='best', fontsize=8)
+        ax8b.grid(True, alpha=0.3, linestyle=':')
+        
+        # Estimated Azimuth Velocity
+        ax8c.plot(t, np.rad2deg(np.array(self.log_data['est_az_dot'])), 
+                  color=color_az, linewidth=1.5, label='est_az_dot', alpha=0.9)
+        ax8c.plot(t, np.rad2deg(np.array(self.log_data['qd_az'])), 
+                  color=color_az, linewidth=1.0, linestyle='--', label='qd_az (true)', alpha=0.5)
+        ax8c.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax8c.set_ylabel('Azimuth Rate [deg/s]', fontsize=10, fontweight='bold')
+        ax8c.set_xlabel('Time [s]', fontsize=10, fontweight='bold')
+        ax8c.set_title('Estimated Azimuth Velocity', fontsize=11, fontweight='bold')
+        ax8c.legend(loc='best', fontsize=8)
+        ax8c.grid(True, alpha=0.3, linestyle=':')
+        
+        # Estimated Elevation Velocity
+        ax8d.plot(t, np.rad2deg(np.array(self.log_data['est_el_dot'])), 
+                  color=color_el, linewidth=1.5, label='est_el_dot', alpha=0.9)
+        ax8d.plot(t, np.rad2deg(np.array(self.log_data['qd_el'])), 
+                  color=color_el, linewidth=1.0, linestyle='--', label='qd_el (true)', alpha=0.5)
+        ax8d.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        ax8d.set_ylabel('Elevation Rate [deg/s]', fontsize=10, fontweight='bold')
+        ax8d.set_xlabel('Time [s]', fontsize=10, fontweight='bold')
+        ax8d.set_title('Estimated Elevation Velocity', fontsize=11, fontweight='bold')
+        ax8d.legend(loc='best', fontsize=8)
+        ax8d.grid(True, alpha=0.3, linestyle=':')
+        
+        fig8.suptitle('EKF State Estimates vs. True State', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+        
+        # Show all figures
+        plt.show()
+        
+        print("=" * 70)
+        print("PLOTS GENERATED SUCCESSFULLY")
+        print("=" * 70)
+        print(f"Total Figures Created: 8")
+        print(f"  - Figure 1: Gimbal Position (q_az, q_el)")
+        print(f"  - Figure 2: Gimbal Velocity (qd_az, qd_el)")
+        print(f"  - Figure 3: Control Torques (torque_az, torque_el)")
+        print(f"  - Figure 4: FSM State (tip, tilt, commands)")
+        print(f"  - Figure 5: Sensor Measurements (encoders, gyros)")
+        print(f"  - Figure 6: QPD Measurements (NES X, Y)")
+        print(f"  - Figure 7: LOS Errors (X, Y, Total)")
+        print(f"  - Figure 8: EKF State Estimates")
+        print(f"\nTotal Simulation Time: {t[-1]:.3f} s")
+        print(f"Number of Samples: {len(t)}")
+        print(f"RMS LOS Error: {rms_los:.2f} µrad")
+        print("=" * 70)
     
     def reset(self) -> None:
         """Reset simulation to initial conditions."""

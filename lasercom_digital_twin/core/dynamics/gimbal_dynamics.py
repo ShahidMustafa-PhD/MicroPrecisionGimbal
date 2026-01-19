@@ -32,7 +32,7 @@ class GimbalDynamics:
     def __init__(self, 
                  pan_mass: float = 0.5, 
                  tilt_mass: float = 0.25,
-                 cm_r: float = 0.02,
+                 cm_r: float = 0.002,
                  cm_h: float = 0.005,
                  gravity: float = 9.81):
         """
@@ -94,33 +94,33 @@ class GimbalDynamics:
     # However, the physical unbalance r, h implies the Principal Axes are not aligned with Joint Axes.
     # We handle this by calculating the M(q) matrix explicitly with geometric transforms.
 
-def get_mass_matrix(self, q: np.ndarray) -> np.ndarray:
-    theta_pan, theta_tilt = q
-    c2 = np.cos(theta_tilt)
-    s2 = np.sin(theta_tilt)
+    def get_mass_matrix(self, q: np.ndarray) -> np.ndarray:
+        theta_pan, theta_tilt = q
+        c2 = np.cos(theta_tilt)
+        s2 = np.sin(theta_tilt)
     
     # 1. M11: Pan Axis Inertia
     # Projection of the tilt body inertia tensor onto the pan Z-axis
-    I2_proj = self.I2_xx * (s2**2) + self.I2_zz * (c2**2)
+        I2_proj = self.I2_xx * (s2**2) + self.I2_zz * (c2**2)
     
     # CM position in Pan Frame (assuming tilt axis is at origin of pan frame)
     # x_pos is the lever arm for the Z-axis rotation
-    x_pos = self.h * c2 + self.r * s2
-    dist_sq_pan = x_pos**2
+        x_pos = self.h * c2 + self.r * s2
+        dist_sq_pan = x_pos**2
     
-    m11 = self.I1_zz + I2_proj + self.m2 * dist_sq_pan
+        m11 = self.I1_zz + I2_proj + self.m2 * dist_sq_pan
     
     # 2. M22: Tilt Axis Inertia (Parallel Axis Theorem applied here!)
     # I_pivot = I_cm + m * dist^2
-    m22 = self.I2_yy + self.m2 * (self.r**2 + self.h**2)
+        m22 = self.I2_yy + self.m2 * (self.r**2 + self.h**2)
     
     # 3. M12 / M21: Coupling (Dynamic Unbalance)
     # For LaserCom, we include the product of inertia term
     # z_pos = -h*s2 + r*c2
-    m12 = self.m2 * (x_pos * (-self.h * s2 + self.r * c2))
-    m21 = m12
+        m12 = self.m2 * (x_pos * (-self.h * s2 + self.r * c2))
+        m21 = m12
 
-    return np.array([[m11, m12], [m21, m22]])
+        return np.array([[m11, m12], [m21, m22]])
 
     def get_coriolis_matrix(self, q: np.ndarray, dq: np.ndarray) -> np.ndarray:
         """

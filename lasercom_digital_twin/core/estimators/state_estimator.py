@@ -38,6 +38,7 @@ import numpy as np
 from typing import Tuple, Optional, Dict, List
 from dataclasses import dataclass
 from enum import IntEnum
+from ..dynamics.gimbal_dynamics import GimbalDynamics
 
 
 class StateIndex(IntEnum):
@@ -128,6 +129,20 @@ class PointingStateEstimator:
         self.inertia_el: float = config.get('inertia_el', 1.0)  # kg·m²
         self.friction_az: float = config.get('friction_coeff_az', 0.1)  # N·m·s/rad
         self.friction_el: float = config.get('friction_coeff_el', 0.1)  # N·m·s/rad
+        
+        # Initialize GimbalDynamics for true physical model
+        pan_mass = config.get('pan_mass', 0.5)
+        tilt_mass = config.get('tilt_mass', 0.25)
+        cm_r = config.get('cm_r', 0.002)
+        cm_h = config.get('cm_h', 0.005)
+        gravity = config.get('gravity', 9.81)
+        self.gimbal_dynamics = GimbalDynamics(
+            pan_mass=pan_mass,
+            tilt_mass=tilt_mass,
+            cm_r=cm_r,
+            cm_h=cm_h,
+            gravity=gravity
+        )
         
         # Optical parameters for measurement model
         self.qpd_sensitivity: float = config.get('qpd_sensitivity', 2000.0)  # V/rad
@@ -222,10 +237,35 @@ class PointingStateEstimator:
         tau_az = u[0] if len(u) > 0 else 0.0
         tau_el = u[1] if len(u) > 1 else 0.0
         
-        # Compute accelerations (simplified rigid body dynamics)
-        # θ̈ = (τ - friction - disturbance) / J
-        accel_az = (tau_az - self.friction_az * theta_dot_az - dist_az) / self.inertia_az
-        accel_el = (tau_el - self.friction_el * theta_dot_el - dist_el) / self.inertia_el
+        # Use true manipulator equation dynamics: M(q)q̈ + C(q,q̇)q̇ + G(q) = τ + d
+        # State: q = [theta_az, theta_el], dq = [theta_dot_az, theta_dot_el]
+        q = np.array([theta_az, theta_el])
+        dq = np.array([theta_dot_az, theta_dot_el])
+        
+        # Get true dynamics matrices
+        M = self.gimbal_dynamics.get_mass_matrix(q)
+        C = self.gimbal_dynamics.get_coriolis_matrix(q, dq)
+        G = self.gimbal_dynamics.get_gravity_vector(q)
+        
+        # Control torque vector (including disturbances and friction)
+        tau = np.array([tau_az, tau_el])
+        
+        # Friction torques (viscous damping model)
+        friction = np.array([self.friction_az * theta_dot_az, 
+                            self.friction_el * theta_dot_el])
+        
+        # Disturbance torques
+        disturbances = np.array([dist_az, dist_el])
+        
+        # Total effective torque: τ_eff = τ - friction + disturbances
+        tau_effective = tau - friction + disturbances
+        
+        # Solve for accelerations: M(q)q̈ = τ_eff - C(q,q̇)q̇ - G(q)
+        rhs = tau_effective - (C @ dq) - G
+        accelerations = np.linalg.solve(M, rhs) #criticlal...
+        
+        accel_az = accelerations[0]
+        accel_el = accelerations[1]
         
         # State propagation (Euler integration)
         x_pred = self.x_hat.copy()
@@ -256,12 +296,15 @@ class PointingStateEstimator:
         theta_dot_el: float
     ) -> np.ndarray:
         """
-        Compute process model Jacobian F_k = ∂f/∂x.
+        Compute process model Jacobian F_k = ∂f/∂x based on true dynamics.
         
-        For the linearized discrete-time system:
-        x_k+1 ≈ x_k + ∂f/∂x · dt
+        For the nonlinear system: M(q)q̈ + C(q,q̇)q̇ + G(q) = τ + d
+        We linearize around the current state to get: F_k = I + A · dt
         
-        F_k = I + (∂f/∂x) · dt
+        State derivatives:
+        ẋ = [θ̇, θ̈, ḃ, φ̇, φ̈, ḃ, ψ̇, ψ̈, ḋ_az, ḋ_el]^T
+        
+        where θ̈ = M^{-1}(q)[τ - C(q,q̇)q̇ - G(q) - friction + d]
         
         Parameters
         ----------
@@ -279,19 +322,107 @@ class PointingStateEstimator:
         """
         F = np.eye(self.n_states)
         
-        # Position depends on velocity
+        # Extract current state for linearization
+        theta_az = self.x_hat[StateIndex.THETA_AZ]
+        theta_el = self.x_hat[StateIndex.THETA_EL]
+        q = np.array([theta_az, theta_el])
+        dq = np.array([theta_dot_az, theta_dot_el])
+        
+        # Get dynamics matrices at current state
+        M = self.gimbal_dynamics.get_mass_matrix(q)
+        M_inv = np.linalg.inv(M)
+        C = self.gimbal_dynamics.get_coriolis_matrix(q, dq)
+        G = self.gimbal_dynamics.get_gravity_vector(q)
+        
+        # Numerical derivatives for M(q), C(q,dq), G(q) w.r.t. q
+        # Using finite differences with small perturbation
+        epsilon = 1e-6
+        
+        # Derivatives w.r.t. theta_az (q[0])
+        q_perturbed = q.copy()
+        q_perturbed[0] += epsilon
+        M_perturbed = self.gimbal_dynamics.get_mass_matrix(q_perturbed)
+        C_perturbed = self.gimbal_dynamics.get_coriolis_matrix(q_perturbed, dq)
+        G_perturbed = self.gimbal_dynamics.get_gravity_vector(q_perturbed)
+        
+        dM_dq0 = (M_perturbed - M) / epsilon
+        dC_dq0 = (C_perturbed - C) / epsilon
+        dG_dq0 = (G_perturbed - G) / epsilon
+        
+        # Derivatives w.r.t. theta_el (q[1])
+        q_perturbed = q.copy()
+        q_perturbed[1] += epsilon
+        M_perturbed = self.gimbal_dynamics.get_mass_matrix(q_perturbed)
+        C_perturbed = self.gimbal_dynamics.get_coriolis_matrix(q_perturbed, dq)
+        G_perturbed = self.gimbal_dynamics.get_gravity_vector(q_perturbed)
+        
+        dM_dq1 = (M_perturbed - M) / epsilon
+        dC_dq1 = (C_perturbed - C) / epsilon
+        dG_dq1 = (G_perturbed - G) / epsilon
+        
+        # Derivatives w.r.t. velocities for C matrix
+        dq_perturbed = dq.copy()
+        dq_perturbed[0] += epsilon
+        C_perturbed_v0 = self.gimbal_dynamics.get_coriolis_matrix(q, dq_perturbed)
+        dC_ddq0 = (C_perturbed_v0 - C) / epsilon
+        
+        dq_perturbed = dq.copy()
+        dq_perturbed[1] += epsilon
+        C_perturbed_v1 = self.gimbal_dynamics.get_coriolis_matrix(q, dq_perturbed)
+        dC_ddq1 = (C_perturbed_v1 - C) / epsilon
+        
+        # Friction diagonal matrix
+        B_friction = np.diag([self.friction_az, self.friction_el])
+        
+        # Current forcing term: f = -C*dq - G
+        f_current = -(C @ dq) - G
+        
+        # Compute Jacobian blocks for acceleration equations
+        # q̈ = M^{-1}[τ - C*q̇ - G - B_friction*q̇ + d]
+        # ∂q̈/∂q = -M^{-1}[∂M/∂q * M^{-1} * (τ - C*q̇ - G - B_f*q̇ + d) + ∂C/∂q*q̇ + ∂G/∂q]
+        # ∂q̈/∂q̇ = -M^{-1}[C + B_friction + ∂C/∂q̇*q̇]
+        
+        # Simplified: ∂q̈/∂q (neglecting higher-order M derivative coupling for stability)
+        dddq_dq_az = -M_inv @ (dC_dq0 @ dq + dG_dq0)
+        dddq_dq_el = -M_inv @ (dC_dq1 @ dq + dG_dq1)
+        
+        # ∂q̈/∂q̇
+        dddq_ddq = -M_inv @ (C + B_friction)
+        
+        # Position kinematics: θ̇
         F[StateIndex.THETA_AZ, StateIndex.THETA_DOT_AZ] = dt
         F[StateIndex.THETA_EL, StateIndex.THETA_DOT_EL] = dt
         F[StateIndex.PHI_ROLL, StateIndex.PHI_DOT_ROLL] = dt
         
-        # Velocity depends on friction and disturbance
-        F[StateIndex.THETA_DOT_AZ, StateIndex.THETA_DOT_AZ] = 1.0 - (self.friction_az / self.inertia_az) * dt
-        F[StateIndex.THETA_DOT_AZ, StateIndex.DIST_AZ] = -dt / self.inertia_az
+        # Velocity dynamics: θ̈ dependencies
+        # ∂θ̇_az/∂θ_az
+        F[StateIndex.THETA_DOT_AZ, StateIndex.THETA_AZ] = 1.0 + dddq_dq_az[0] * dt
+        # ∂θ̇_az/∂θ_el
+        F[StateIndex.THETA_DOT_AZ, StateIndex.THETA_EL] = dddq_dq_el[0] * dt
+        # ∂θ̇_az/∂θ̇_az
+        F[StateIndex.THETA_DOT_AZ, StateIndex.THETA_DOT_AZ] = 1.0 + dddq_ddq[0, 0] * dt
+        # ∂θ̇_az/∂θ̇_el
+        F[StateIndex.THETA_DOT_AZ, StateIndex.THETA_DOT_EL] = dddq_ddq[0, 1] * dt
+        # ∂θ̇_az/∂d_az (disturbance)
+        F[StateIndex.THETA_DOT_AZ, StateIndex.DIST_AZ] = M_inv[0, 0] * dt
+        # ∂θ̇_az/∂d_el (coupling through M_inv)
+        F[StateIndex.THETA_DOT_AZ, StateIndex.DIST_EL] = M_inv[0, 1] * dt
         
-        F[StateIndex.THETA_DOT_EL, StateIndex.THETA_DOT_EL] = 1.0 - (self.friction_el / self.inertia_el) * dt
-        F[StateIndex.THETA_DOT_EL, StateIndex.DIST_EL] = -dt / self.inertia_el
+        # ∂θ̇_el/∂θ_az
+        F[StateIndex.THETA_DOT_EL, StateIndex.THETA_AZ] = dddq_dq_az[1] * dt
+        # ∂θ̇_el/∂θ_el
+        F[StateIndex.THETA_DOT_EL, StateIndex.THETA_EL] = 1.0 + dddq_dq_el[1] * dt
+        # ∂θ̇_el/∂θ̇_az
+        F[StateIndex.THETA_DOT_EL, StateIndex.THETA_DOT_AZ] = dddq_ddq[1, 0] * dt
+        # ∂θ̇_el/∂θ̇_el
+        F[StateIndex.THETA_DOT_EL, StateIndex.THETA_DOT_EL] = 1.0 + dddq_ddq[1, 1] * dt
+        # ∂θ̇_el/∂d_az (coupling through M_inv)
+        F[StateIndex.THETA_DOT_EL, StateIndex.DIST_AZ] = M_inv[1, 0] * dt
+        # ∂θ̇_el/∂d_el (disturbance)
+        F[StateIndex.THETA_DOT_EL, StateIndex.DIST_EL] = M_inv[1, 1] * dt
         
         # Biases and disturbances are modeled as random walks (identity)
+        # Roll dynamics (simplified, no coupling)
         
         return F
     
@@ -611,3 +742,158 @@ class PointingStateEstimator:
         self.innovation = np.zeros(self.n_measurements)
         self.K = np.zeros((self.n_states, self.n_measurements))
         self.iteration = 0
+
+
+def _run_hypothetical_scenario() -> None:
+    """Run a simple simulation to sanity‑check the EKF implementation.
+
+    This function simulates a 2‑DOF gimbal using the same GimbalDynamics model
+    used inside the estimator as the "truth" plant. No external dependencies
+    are required; results are printed to stdout.
+
+    Scenario highlights
+    -------------------
+    - Plant: 2‑DOF gimbal driven by a smooth, bounded torque profile
+    - Sensors: noisy encoders and gyros with fixed biases, QPD near zero
+    - Estimator: PointingStateEstimator with small process/measurement noise
+    - Outputs: RMS angle/rate errors and bias/disturbance convergence summary
+    """
+
+    np.random.seed(1)
+
+    # Configuration for a modestly damped, well‑conditioned gimbal
+    process_noise_std = np.array([
+        1e-6,  5e-5,  5e-6,   # Az: θ, θ̇, bias
+        1e-6,  5e-5,  5e-6,   # El: θ, θ̇, bias
+        1e-6,  5e-5,          # Roll: φ, φ̇ (not excited here)
+        5e-3,  5e-3           # Disturbances
+    ])
+
+    measurement_noise_std = np.array([
+        2.5e-5, 2.5e-5,   # Encoders [rad]
+        5e-6,  5e-6,      # Gyros [rad/s]
+        1e-4,  1e-4       # QPD [dimensionless]
+    ])
+
+    config = {
+        "initial_state": np.zeros(10),
+        "inertia_az": 1.0,
+        "inertia_el": 1.0,
+        "friction_coeff_az": 0.01,
+        "friction_coeff_el": 0.01,
+        "process_noise_std": process_noise_std,
+        "measurement_noise_std": measurement_noise_std,
+    }
+
+    estimator = PointingStateEstimator(config)
+    dynamics = estimator.gimbal_dynamics
+
+    # True plant state (q: [az, el], dq: [az_dot, el_dot])
+    q_true = np.zeros(2)
+    dq_true = np.zeros(2)
+
+    # True (unknown to estimator) gyro biases and disturbance torques
+    bias_true = np.array([0.01, -0.008])       # rad/s
+    dist_true = np.array([0.02, -0.015])       # N·m
+
+    # Simulation setup
+    dt = 0.01
+    T_final = 10.0
+    n_steps = int(T_final / dt)
+
+    # Logging arrays
+    theta_true_log = np.zeros((n_steps, 2))
+    theta_hat_log = np.zeros((n_steps, 2))
+    theta_dot_true_log = np.zeros((n_steps, 2))
+    theta_dot_hat_log = np.zeros((n_steps, 2))
+    bias_hat_log = np.zeros((n_steps, 2))
+
+    for k in range(n_steps):
+        t = k * dt
+
+        # Commanded torques: smooth bounded excitation on both axes
+        tau_cmd = np.array([
+            0.05 * np.sin(0.7 * t),
+            0.04 * np.cos(0.5 * t),
+        ])
+
+        # Plant friction (match estimator friction model)
+        friction_true = np.array([
+            config["friction_coeff_az"] * dq_true[0],
+            config["friction_coeff_el"] * dq_true[1],
+        ])
+
+        # Total torque applied to physical plant
+        tau_total = tau_cmd - friction_true + dist_true
+
+        # True plant dynamics: q¨ = M(q)^-1 (tau_total − C(q, q̇) q̇ − G(q))
+        q_dd_true = dynamics.compute_forward_dynamics(q_true, dq_true, tau_total)
+
+        # Integrate true state (Euler)
+        dq_true = dq_true + q_dd_true * dt
+        q_true = q_true + dq_true * dt
+
+        # Generate noisy measurements consistent with estimator's measurement model
+        enc_noise_std = measurement_noise_std[0]
+        gyro_noise_std = measurement_noise_std[2]
+        qpd_noise_std = measurement_noise_std[4]
+
+        measurements = {
+            "theta_az_enc": q_true[0] + np.random.randn() * enc_noise_std,
+            "theta_el_enc": q_true[1] + np.random.randn() * enc_noise_std,
+            "theta_dot_az_gyro": dq_true[0] + bias_true[0] + np.random.randn() * gyro_noise_std,
+            "theta_dot_el_gyro": dq_true[1] + bias_true[1] + np.random.randn() * gyro_noise_std,
+            # QPD model in estimator is currently a placeholder at 0.0
+            "nes_x_qpd": np.random.randn() * qpd_noise_std,
+            "nes_y_qpd": np.random.randn() * qpd_noise_std,
+        }
+
+        # EKF step using commanded torques (control input) and synthetic measurements
+        x_hat = estimator.step(tau_cmd, measurements, dt)
+
+        # Log key quantities
+        theta_true_log[k, :] = q_true
+        theta_hat_log[k, :] = [
+            x_hat[StateIndex.THETA_AZ],
+            x_hat[StateIndex.THETA_EL],
+        ]
+        theta_dot_true_log[k, :] = dq_true
+        theta_dot_hat_log[k, :] = [
+            x_hat[StateIndex.THETA_DOT_AZ],
+            x_hat[StateIndex.THETA_DOT_EL],
+        ]
+        bias_hat_log[k, :] = [
+            x_hat[StateIndex.BIAS_AZ],
+            x_hat[StateIndex.BIAS_EL],
+        ]
+
+    # Compute basic performance metrics
+    pos_err = theta_hat_log - theta_true_log
+    vel_err = theta_dot_hat_log - theta_dot_true_log
+
+    rms_pos_err = np.sqrt(np.mean(pos_err**2, axis=0))
+    rms_vel_err = np.sqrt(np.mean(vel_err**2, axis=0))
+
+    print("=== EKF Hypothetical Scenario Summary ===")
+    print(f"Simulation duration       : {T_final:.2f} s, dt = {dt:.3f} s, steps = {n_steps}")
+    print("True gyro biases          : Az = {:.5f} rad/s, El = {:.5f} rad/s".format(
+        bias_true[0], bias_true[1]
+    ))
+    print("Final estimated biases    : Az = {:.5f} rad/s, El = {:.5f} rad/s".format(
+        bias_hat_log[-1, 0], bias_hat_log[-1, 1]
+    ))
+    print("RMS angle error           : Az = {:.3e} rad, El = {:.3e} rad".format(
+        rms_pos_err[0], rms_pos_err[1]
+    ))
+    print("RMS angular‑rate error    : Az = {:.3e} rad/s, El = {:.3e} rad/s".format(
+        rms_vel_err[0], rms_vel_err[1]
+    ))
+    print("Final state estimate      :", estimator.get_fused_state())
+    print("Trace(P) (uncertainty)    :", float(np.trace(estimator.P)))
+
+
+if __name__ == "__main__":
+    # When this module is executed directly, run a simple hypothetical
+    # scenario to validate the EKF's basic behavior.
+    _run_hypothetical_scenario()
+
