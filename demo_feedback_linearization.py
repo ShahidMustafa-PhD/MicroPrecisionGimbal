@@ -72,12 +72,13 @@ def run_comparison_study():
     # Common parameters
     target_az_deg = 15.0
     target_el_deg = 40.0
-    duration = 1.0
+    duration = 2.5
     
     print(f"Test Conditions:")
     print(f"  - Target: Az={target_az_deg:.1f}°, El={target_el_deg:.1f}°")
     print(f"  - Duration: {duration:.1f} seconds")
     print(f"  - Initial position: [0°, 0°]")
+    print(f"  - MAST VIBRATION: Enabled (Starts at t=1.0s)")
     print(f"  - Large slew maneuver to test tracking performance\n")
     
     # =========================================================================
@@ -99,9 +100,16 @@ def run_comparison_study():
         use_feedback_linearization=False,  # PID mode
         enable_visualization=False,
         real_time_factor=0.0,
+        vibration_enabled=True,
+        vibration_config={
+            'start_time': 1.0,
+            'frequency_hz': 40.0,
+            'amplitude_rad': 100e-6,  # 100 µrad jitter
+            'harmonics': [(1.0, 1.0), (2.1, 0.3)]
+        },
         coarse_controller_config={
-            'kp': 50.0,
-            'ki': 10.0,
+            'kp': 100.0,
+            'ki': 200.0,
             'kd': 2.0,
             'anti_windup_gain': 1.0,
             'tau_rate_limit': 50.0
@@ -132,6 +140,13 @@ def run_comparison_study():
         use_feedback_linearization=True,  # FL mode
         enable_visualization=False,
         real_time_factor=0.0,
+        vibration_enabled=True,
+        vibration_config={
+            'start_time': 1.0,
+            'frequency_hz': 40.0,
+            'amplitude_rad': 100e-6,
+            'harmonics': [(1.0, 1.0), (2.1, 0.3)]
+        },
         feedback_linearization_config={
             'kp': [150.0, 150.0],  # Higher gains stable due to linearization
             'kd': [30.0, 30.0],
