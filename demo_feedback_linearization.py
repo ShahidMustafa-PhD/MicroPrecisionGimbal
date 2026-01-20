@@ -70,8 +70,8 @@ def run_comparison_study():
     print("=" * 80 + "\n")
     
     # Common parameters
-    target_az_deg = 15.0
-    target_el_deg = 40.0
+    target_az_deg = 5.0
+    target_el_deg = 3.0
     duration = 2.5
     
     print(f"Test Conditions:")
@@ -79,6 +79,9 @@ def run_comparison_study():
     print(f"  - Duration: {duration:.1f} seconds")
     print(f"  - Initial position: [0°, 0°]")
     print(f"  - MAST VIBRATION: Enabled (Starts at t=1.0s)")
+    print(f"  - Controller: Corrected PID gains (double-integrator design)")
+    print(f"    • Pan:  Kp=3.257, Ki=10.232, Kd=0.147")
+    print(f"    • Tilt: Kp=0.660, Ki=2.074,  Kd=0.030")
     print(f"  - Large slew maneuver to test tracking performance\n")
     
     # =========================================================================
@@ -108,17 +111,21 @@ def run_comparison_study():
             'harmonics': [(1.0, 1.0), (2.1, 0.3)]
         },
         coarse_controller_config={
-            'kp': 100.0,
-            'ki': 200.0,
-            'kd': 2.0,
+            # Corrected gains from double-integrator design (FIXED derivative calculation)
+            # These gains are now correct after fixing the derivative term bug
+            'kp': [3.257, 0.660],    # Per-axis: [Pan, Tilt]
+            'ki': [10.232, 2.074],   # Designed for 5 Hz bandwidth
+            'kd': [0.146599, 0.029709],  # Corrected Kd values (40% higher than before)
             'anti_windup_gain': 1.0,
-            'tau_rate_limit': 50.0
+            'tau_rate_limit': 50.0,
+            'enable_derivative': True  # Now works correctly with fixed implementation
         }
     )
     
     print("Initializing PID controller simulation...")
     runner_pid = DigitalTwinRunner(config_pid)
     print("Running simulation...\n")
+
     results_pid = runner_pid.run_simulation(duration=duration)
     
     # =========================================================================
@@ -148,16 +155,16 @@ def run_comparison_study():
             'harmonics': [(1.0, 1.0), (2.1, 0.3)]
         },
         feedback_linearization_config={
-            'kp': [150.0, 150.0],  # Higher gains stable due to linearization
+            'kp': [300.0, 300.0],  # Higher gains stable due to linearization
             'kd': [30.0, 30.0],
-            'tau_max': [10.0, 10.0],
-            'tau_min': [-10.0, -10.0]
+            'tau_max': [1.0, 1.0],
+            'tau_min': [-1.0, -1.0]
         },
         dynamics_config={
             'pan_mass': 0.5,
             'tilt_mass': 0.25,
-            'cm_r': 0.0002,
-            'cm_h': 0.0005,
+            'cm_r': 0.0,
+            'cm_h': 0.0,
             'gravity': 9.81
         }
     )
@@ -174,8 +181,58 @@ def run_comparison_study():
     print("PERFORMANCE COMPARISON")
     print("=" * 80)
     
+    # Extract tracking performance metrics
+    def compute_tracking_metrics(results, target_az_rad, target_el_rad):
+        """Compute step response characteristics"""
+        t = results['log_arrays']['time']
+        q_az = results['log_arrays']['q_az']
+        q_el = results['log_arrays']['q_el']
+        
+        # Azimuth tracking
+        error_az = q_az - target_az_rad
+        settling_criterion_az = 0.02 * abs(target_az_rad)  # 2% of final value
+        settled_az = np.where(np.abs(error_az) < settling_criterion_az)[0]
+        settling_time_az = t[settled_az[0]] if len(settled_az) > 0 else t[-1]
+        overshoot_az = 100.0 * (np.max(q_az) - target_az_rad) / target_az_rad if target_az_rad != 0 else 0.0
+        steady_state_error_az = np.mean(error_az[-100:])  # Last 100 samples
+        
+        # Elevation tracking
+        error_el = q_el - target_el_rad
+        settling_criterion_el = 0.02 * abs(target_el_rad)
+        settled_el = np.where(np.abs(error_el) < settling_criterion_el)[0]
+        settling_time_el = t[settled_el[0]] if len(settled_el) > 0 else t[-1]
+        overshoot_el = 100.0 * (np.max(q_el) - target_el_rad) / target_el_rad if target_el_rad != 0 else 0.0
+        steady_state_error_el = np.mean(error_el[-100:])
+        
+        return {
+            'settling_time_az': settling_time_az,
+            'settling_time_el': settling_time_el,
+            'overshoot_az': overshoot_az,
+            'overshoot_el': overshoot_el,
+            'ss_error_az': steady_state_error_az,
+            'ss_error_el': steady_state_error_el
+        }
+    
+    target_az_rad = np.deg2rad(target_az_deg)
+    target_el_rad = np.deg2rad(target_el_deg)
+    
+    metrics_pid = compute_tracking_metrics(results_pid, target_az_rad, target_el_rad)
+    metrics_fl = compute_tracking_metrics(results_fl, target_az_rad, target_el_rad)
+    
     print(f"\n{'Metric':<40} {'PID':<20} {'FL':<20} {'Improvement':<15}")
     print("-" * 95)
+    
+    # Settling Time
+    print(f"{'Settling Time - Az (s)':<40} {metrics_pid['settling_time_az']:<20.3f} {metrics_fl['settling_time_az']:<20.3f} {(metrics_pid['settling_time_az']-metrics_fl['settling_time_az'])*1000:<15.0f} ms")
+    print(f"{'Settling Time - El (s)':<40} {metrics_pid['settling_time_el']:<20.3f} {metrics_fl['settling_time_el']:<20.3f} {(metrics_pid['settling_time_el']-metrics_fl['settling_time_el'])*1000:<15.0f} ms")
+    
+    # Overshoot
+    print(f"{'Overshoot - Az (%)':<40} {metrics_pid['overshoot_az']:<20.2f} {metrics_fl['overshoot_az']:<20.2f} {metrics_pid['overshoot_az']-metrics_fl['overshoot_az']:<15.2f}%")
+    print(f"{'Overshoot - El (%)':<40} {metrics_pid['overshoot_el']:<20.2f} {metrics_fl['overshoot_el']:<20.2f} {metrics_pid['overshoot_el']-metrics_fl['overshoot_el']:<15.2f}%")
+    
+    # Steady-State Error
+    print(f"{'Steady-State Error - Az (µrad)':<40} {np.rad2deg(metrics_pid['ss_error_az'])*3600:<20.2f} {np.rad2deg(metrics_fl['ss_error_az'])*3600:<20.2f}")
+    print(f"{'Steady-State Error - El (µrad)':<40} {np.rad2deg(metrics_pid['ss_error_el'])*3600:<20.2f} {np.rad2deg(metrics_fl['ss_error_el'])*3600:<20.2f}")
     
     # LOS Error
     los_rms_pid = results_pid['los_error_rms'] * 1e6
