@@ -75,8 +75,8 @@ class FSMController:
         self.config = config
         
         # PI gains (2-DOF: tip and tilt)
-        self.kp: np.ndarray = np.array(config.get('kp', [0.010, 0.010]))
-        self.ki: np.ndarray = np.array(config.get('ki', [0.5, 0.5]))
+        self.kp: np.ndarray = np.array(config.get('kp', [0.550, 0.550]))
+        self.ki: np.ndarray = np.array(config.get('ki', [1000, 1000]))
         
         # FSM deflection limits (physical travel)
         self.fsm_max: np.ndarray = np.array(

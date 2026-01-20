@@ -258,12 +258,27 @@ class DesignRequirements:
                 actual_value = design_metrics[req.metric]
                 tolerance = req.tolerance
 
-                # Check if within tolerance
+                # Check if within tolerance based on metric type
                 if req.metric in [PerformanceMetric.STEADY_STATE_ERROR]:
                     # For error metrics, smaller is better
                     passed = actual_value <= (req.value + tolerance)
+                elif req.metric in [PerformanceMetric.BANDWIDTH]:
+                    # For bandwidth, higher is better (minimum requirement)
+                    passed = actual_value >= (req.value - tolerance)
+                elif req.metric in [PerformanceMetric.SETTLING_TIME]:
+                    # For settling time, lower is better (maximum requirement)
+                    passed = actual_value <= (req.value + tolerance)
+                elif req.metric in [PerformanceMetric.OVERSHOOT]:
+                    # For overshoot, lower is better (maximum requirement)
+                    passed = actual_value <= (req.value + tolerance)
+                elif req.metric in [PerformanceMetric.PHASE_MARGIN]:
+                    # For phase margin, higher is better (minimum requirement)
+                    passed = actual_value >= (req.value - tolerance)
+                elif req.metric in [PerformanceMetric.GAIN_MARGIN]:
+                    # For gain margin, higher is better (minimum requirement)
+                    passed = actual_value >= (req.value - tolerance)
                 else:
-                    # For other metrics, check both bounds
+                    # Default: check both bounds
                     passed = (req.value - tolerance) <= actual_value <= (req.value + tolerance)
 
                 results[f"{req.metric.value}_{req.level.value}"] = passed

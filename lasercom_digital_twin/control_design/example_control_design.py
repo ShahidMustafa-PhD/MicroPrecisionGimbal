@@ -9,6 +9,13 @@ This script demonstrates the complete control design workflow:
 4. Requirements validation
 """
 
+import sys
+import os
+
+# Add project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+sys.path.insert(0, project_root)
+
 import numpy as np
 import matplotlib.pyplot as plt
 import control as ctrl
