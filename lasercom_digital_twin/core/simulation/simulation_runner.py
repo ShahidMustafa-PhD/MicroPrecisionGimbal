@@ -644,6 +644,7 @@ class DigitalTwinRunner:
         )
         
         # QPD measures from focal plane position
+        #Normalized Error Signal (NES)
         nes_x, nes_y = self.qpd.measure_from_focal_plane(focal_pos.x_um, focal_pos.y_um)
         self.state.z_qpd_nes_x = nes_x
         self.state.z_qpd_nes_y = nes_y
