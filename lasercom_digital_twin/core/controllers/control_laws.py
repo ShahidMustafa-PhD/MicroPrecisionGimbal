@@ -536,7 +536,7 @@ class FeedbackLinearizationController(BaseController):
     - de = dq_ref - dq: Velocity error
     """
 
-    def __init__(self, config: dict, dynamics_model):
+    def __init__(self, config: dict, dynamics_model, ndob=None):
         """
         Initialize feedback linearization controller.
         
@@ -553,16 +553,19 @@ class FeedbackLinearizationController(BaseController):
         dynamics_model : GimbalDynamics
             Instance of the physics model from gimbal_dynamics.py
             Must have methods: get_mass_matrix, get_coriolis_matrix, get_gravity_vector
+        ndob : NonlinearDisturbanceObserver, optional
+            Model-based observer for rejecting unmodeled disturbances.
         """
         super().__init__(config)
         self.dyn = dynamics_model
+        self.ndob = ndob
         
         # PID Gains for the outer loop (linearized space)
         # Default gains are designed for critically damped response with 5ms motor lag
         # wn ~ 10 rad/s, zeta = 1 → kp = wn^2 = 100, kd = 2*zeta*wn = 20
-        self.kp = np.array(config.get('kp', [100.0, 100.0]))
-        self.kd = np.array(config.get('kd', [20.0, 20.0]))
-        self.ki = np.array(config.get('ki', [10.0, 10.0]))
+        self.kp = np.array(config.get('kp', [100.0, 0.0]))
+        self.kd = np.array(config.get('kd', [20.0, 0.0]))
+        self.ki = np.array(config.get('ki', [10.0, 0.0]))
         self.enable_integral = config.get('enable_integral', False)
         
         # Friction compensation coefficients (must match plant friction!)
@@ -681,6 +684,15 @@ class FeedbackLinearizationController(BaseController):
         C = self.dyn.get_coriolis_matrix(q, dq)
         G = self.dyn.get_gravity_vector(q)
 
+        # 2.1 Update Nonlinear Disturbance Observer (NDOB)
+        # Uses the dynamics model and measurements to estimate lumped disturbances
+        # tau_prev is the torque applied during the previous step (k-1)
+        d_hat_ndob = np.zeros(2)
+        if self.ndob is not None:
+            # Update observer and get estimate
+            # dt is the control cycle duration
+            d_hat_ndob = self.ndob.update(q, dq, self.previous_output, dt)
+
         # 3. Outer Loop: Define the desired acceleration in linearized space
         error = q_ref - q
         error_dot = dq_ref - dq
@@ -743,7 +755,13 @@ class FeedbackLinearizationController(BaseController):
             u_robust = np.zeros(2)
         
         # Commanded torque (IMPROVED FORMULATION)
-        tau = M @ v + C @ dq + G + friction_comp - d_hat + u_robust
+        # tau = M*v + C*dq + G + friction_comp - d_hat + d_hat_ndob + u_robust
+        # Note: we ADD d_hat_ndob because the observer estimates the disturbance d
+        # acting on the plant (tau + d = M*ddq + ...), so compensation is tau = ... - d_hat
+        # Wait, usually it is tau_total = tau_nominal - d_hat.
+        # Let's check NDOB sign. The NDOB module says: tau + d = M*ddq + ...
+        # So tau = M*ddq + ... - d. Thus tau_cmd = (...) - d_hat.
+        tau = M @ v + C @ dq + G + friction_comp - d_hat - d_hat_ndob + u_robust
 
         # 5. Apply Actuator Saturation
         u_saturated = np.clip(tau, self.tau_min, self.tau_max)

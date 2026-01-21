@@ -58,6 +58,7 @@ from lasercom_digital_twin.core.controllers.fsm_pid_control import (
     FsmControllerConfig,
     create_fsm_controller_from_design
 )
+from lasercom_digital_twin.core.n_dist_observer import create_ndob_from_config
 
 
 @dataclass
@@ -75,6 +76,7 @@ class SimulationConfig:
     
     # Visualization and execution
     enable_visualization: bool = False  # Enable MuJoCo viewer
+    enable_plotting: bool = True        # Enable automatic plotting at completion
     real_time_factor: float = 0.0       # 0.0 = fast-as-possible, 1.0 = real-time
     viewer_fps: float = 30.0            # Viewer refresh rate [Hz]
     
@@ -115,6 +117,14 @@ class SimulationConfig:
             (2.5, 0.3),                # Higher frequency harmonic
             (5.0, 0.1)
         ]
+    })
+    
+    # NDOB (Nonlinear Disturbance Observer) configuration
+    ndob_config: Dict = field(default_factory=lambda: {
+        'enable': False,               # Enable NDOB disturbance compensation
+        'lambda_az': 40.0,             # Observer bandwidth Az [rad/s]
+        'lambda_el': 40.0,             # Observer bandwidth El [rad/s]
+        'd_max': 5.0                   # Max disturbance estimate [N·m]
     })
 
 
@@ -165,6 +175,10 @@ class SimulationState:
     los_error_x: float = 0.0       # True LOS error X (tip) [rad]
     los_error_y: float = 0.0       # True LOS error Y (tilt) [rad]
     fsm_saturated: bool = False    # FSM saturation flag
+
+    # NDOB (Nonlinear Disturbance Observer) estimates
+    d_hat_ndob_az: float = 0.0     # Estimated disturbance Az [N·m]
+    d_hat_ndob_el: float = 0.0     # Estimated disturbance El [N·m]
 
 
 class DigitalTwinRunner:
@@ -474,6 +488,16 @@ class DigitalTwinRunner:
         # correct parameters from config.dynamics_config.
         self.gimbal_dynamics = self.dynamics
         
+        # Initialize Nonlinear Disturbance Observer (NDOB) if enabled
+        # This estimates unmodeled torques (friction, etc.) to eliminate SSE
+        self.ndob = None
+        if self.config.ndob_config.get('enable', False):
+            self.ndob = create_ndob_from_config(
+                self.gimbal_dynamics, 
+                self.config.ndob_config
+            )
+            print(f"INFO: NDOB initialized (λ_az={self.config.ndob_config['lambda_az']}, λ_el={self.config.ndob_config['lambda_el']})")
+        
         # Select coarse controller type
         if self.config.use_feedback_linearization:
             # Feedback Linearization Controller
@@ -487,7 +511,8 @@ class DigitalTwinRunner:
             }
             self.coarse_controller = FeedbackLinearizationController(
                 fl_config, 
-                self.gimbal_dynamics
+                self.gimbal_dynamics,
+                ndob=self.ndob
             )
             print("INFO: Using Feedback Linearization Controller")
         else:
@@ -545,8 +570,9 @@ class DigitalTwinRunner:
             'z_enc_az', 'z_enc_el', 'z_gyro_az', 'z_gyro_el',
             'z_qpd_nes_x', 'z_qpd_nes_y',
             'los_error_x', 'los_error_y',
-            'target_az', 'target_el'
-            ,
+            'target_az', 'target_el',
+            # NDOB disturbance estimates
+            'd_hat_ndob_az', 'd_hat_ndob_el',
             # Coarse-loop diagnostics (available for PID; best-effort for FL)
             'coarse_tau_cmd_az', 'coarse_tau_cmd_el',
             'coarse_v_cmd_az', 'coarse_v_cmd_el',
@@ -850,6 +876,11 @@ class DigitalTwinRunner:
         # Save diagnostics for logging
         self.last_tau_cmd = np.array([tau_az, tau_el], dtype=float)
         self.last_coarse_meta = meta or {}
+        
+        # Extract NDOB estimates for logging (if present)
+        d_hat_ndob = meta.get('d_hat_ndob', np.zeros(2))
+        self.state.d_hat_ndob_az = d_hat_ndob[0] if len(d_hat_ndob) > 0 else 0.0
+        self.state.d_hat_ndob_el = d_hat_ndob[1] if len(d_hat_ndob) > 1 else 0.0
         
         # Store for FSM controller
         self.coarse_residual = residual_error
@@ -1291,7 +1322,8 @@ class DigitalTwinRunner:
         
         # Compute performance summary
         results = self._compute_summary()
-        self.plot_results()
+        if self.config.enable_plotting:
+            self.plot_results()
         return results
     
     def _compute_summary(self) -> Dict:

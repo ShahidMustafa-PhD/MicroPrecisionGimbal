@@ -70,8 +70,8 @@ def run_comparison_study():
     print("=" * 80 + "\n")
     
     # Common parameters
-    target_az_deg = 15.0
-    target_el_deg = 3.0
+    target_az_deg = 45.0
+    target_el_deg = 45.0
     duration = 2.5
     
     print(f"Test Conditions:")
@@ -102,6 +102,7 @@ def run_comparison_study():
         target_enabled=True,
         use_feedback_linearization=False,  # PID mode
         enable_visualization=False,
+        enable_plotting=False,             # Disable automatic plots
         real_time_factor=0.0,
         vibration_enabled=True,
         vibration_config={
@@ -125,8 +126,7 @@ def run_comparison_study():
     print("Initializing PID controller simulation...")
     runner_pid = DigitalTwinRunner(config_pid)
     print("Running simulation...\n")
-
-    results_pid = runner_pid.run_simulation(duration=duration)
+    #results_pid = runner_pid.run_simulation(duration=duration)
     
     # =========================================================================
     # Test 2: Feedback Linearization Controller
@@ -147,6 +147,7 @@ def run_comparison_study():
         use_feedback_linearization=True,  # FL mode
         use_direct_state_feedback=True,   # Bypass EKF for cleaner controller testing
         enable_visualization=False,
+        enable_plotting=True,             # Disable automatic plots
         real_time_factor=0.0,
         vibration_enabled=True,
         vibration_config={
@@ -162,10 +163,10 @@ def run_comparison_study():
             # For critically damped: Kd = 2*ζ*ωn, Kp = ωn²
             # With ωn=20: Kp=400, Kd=36. But motor lag limits effective bandwidth.
             # Using ωn=15 for robustness: Kp=225, Kd=27
-            'kp': [150.0, 150.0],    # Position gain [1/s²] - increased for faster response
-            'kd': [20.0, 20.0],    # Velocity gain [1/s] - damping
-            'ki': [15.0, 15.0],      # Integral for steady-state error rejection
-            'enable_integral': True,
+            'kp': [150.0, 400],    # Position gain [1/s²] - increased for faster response
+            'kd': [20.0, 50],    # Velocity gain [1/s] - damping
+            'ki': [15.0, 0],      # Integral for steady-state error rejection
+            'enable_integral': False,
             'tau_max': [10.0, 10.0],
             'tau_min': [-10.0, -10.0],
             # Friction compensation with CONDITIONAL logic (NEW!)
@@ -179,6 +180,14 @@ def run_comparison_study():
             'enable_robust_term': False,  # Set True for additional robustness
             'robust_eta': [0.01, 0.01],   # Switching gain [N·m]
             'robust_lambda': 5.0          # Sliding surface slope
+        },
+        # NDOB (Nonlinear Disturbance Observer) for steady-state error elimination
+        # Enable this to estimate and compensate unmodeled disturbances (friction, etc.)
+        ndob_config={
+            'enable': False,  # Set True to enable NDOB disturbance compensation
+            'lambda_az': 40.0,  # Observer bandwidth Az [rad/s] (τ = 25ms)
+            'lambda_el': 40.0,  # Observer bandwidth El [rad/s]
+            'd_max': 5.0        # Max disturbance estimate [N·m] (safety limit)
         },
         dynamics_config={
             'pan_mass': 0.5,
@@ -195,6 +204,31 @@ def run_comparison_study():
     runner_fl = DigitalTwinRunner(config_fl)
     print("Running simulation...\n")
     results_fl = runner_fl.run_simulation(duration=duration)
+    
+    # =========================================================================
+    # Test 3: Feedback Linearization + NDOB (NEW!)
+    # =========================================================================
+    print("\n" + "-" * 80)
+    print("TEST 3: FEEDBACK LINEARIZATION + NDOB (Disturbance Observer)")
+    print("-" * 80)
+    
+    # Clone FL config but enable NDOB
+    import copy
+    config_ndob = copy.deepcopy(config_fl)
+    config_ndob.ndob_config = {
+        'enable': True,
+        'lambda_az': 20.0,    # Reduced bandwidth for stability (τ = 50ms)
+        'lambda_el': 20.0,
+        'd_max': 5.0
+    }
+    # Disable manual friction compensation when NDOB is active to avoid double-comp
+    config_ndob.feedback_linearization_config['friction_az'] = 0.0
+    config_ndob.feedback_linearization_config['friction_el'] = 0.0
+    
+    print("Initializing FBL + NDOB controller simulation...")
+    runner_ndob = DigitalTwinRunner(config_ndob)
+    print("Running simulation...\n")
+    results_ndob = runner_ndob.run_simulation(duration=duration)
     
     # =========================================================================
     # Results Comparison
@@ -240,39 +274,43 @@ def run_comparison_study():
     
     metrics_pid = compute_tracking_metrics(results_pid, target_az_rad, target_el_rad)
     metrics_fl = compute_tracking_metrics(results_fl, target_az_rad, target_el_rad)
+    metrics_ndob = compute_tracking_metrics(results_ndob, target_az_rad, target_el_rad)
     
-    print(f"\n{'Metric':<40} {'PID':<20} {'FL':<20} {'Improvement':<15}")
-    print("-" * 95)
+    print(f"\n{'Metric':<40} {'PID':<15} {'FBL':<15} {'FBL+NDOB':<15} {'Improvement':<10}")
+    print("-" * 105)
     
     # Settling Time
-    print(f"{'Settling Time - Az (s)':<40} {metrics_pid['settling_time_az']:<20.3f} {metrics_fl['settling_time_az']:<20.3f} {(metrics_pid['settling_time_az']-metrics_fl['settling_time_az'])*1000:<15.0f} ms")
-    print(f"{'Settling Time - El (s)':<40} {metrics_pid['settling_time_el']:<20.3f} {metrics_fl['settling_time_el']:<20.3f} {(metrics_pid['settling_time_el']-metrics_fl['settling_time_el'])*1000:<15.0f} ms")
+    print(f"{'Settling Time - Az (s)':<40} {metrics_pid['settling_time_az']:<15.3f} {metrics_fl['settling_time_az']:<15.3f} {metrics_ndob['settling_time_az']:<15.3f} {(metrics_pid['settling_time_az']-metrics_ndob['settling_time_az'])*1000:<10.0f} ms")
+    print(f"{'Settling Time - El (s)':<40} {metrics_pid['settling_time_el']:<15.3f} {metrics_fl['settling_time_el']:<15.3f} {metrics_ndob['settling_time_el']:<15.3f} {(metrics_pid['settling_time_el']-metrics_ndob['settling_time_el'])*1000:<10.0f} ms")
     
     # Overshoot
-    print(f"{'Overshoot - Az (%)':<40} {metrics_pid['overshoot_az']:<20.2f} {metrics_fl['overshoot_az']:<20.2f} {metrics_pid['overshoot_az']-metrics_fl['overshoot_az']:<15.2f}%")
-    print(f"{'Overshoot - El (%)':<40} {metrics_pid['overshoot_el']:<20.2f} {metrics_fl['overshoot_el']:<20.2f} {metrics_pid['overshoot_el']-metrics_fl['overshoot_el']:<15.2f}%")
+    print(f"{'Overshoot - Az (%)':<40} {metrics_pid['overshoot_az']:<15.2f} {metrics_fl['overshoot_az']:<15.2f} {metrics_ndob['overshoot_az']:<15.2f} {metrics_pid['overshoot_az']-metrics_ndob['overshoot_az']:<10.2f}%")
+    print(f"{'Overshoot - El (%)':<40} {metrics_pid['overshoot_el']:<15.2f} {metrics_fl['overshoot_el']:<15.2f} {metrics_ndob['overshoot_el']:<15.2f} {metrics_pid['overshoot_el']-metrics_ndob['overshoot_el']:<10.2f}%")
     
     # Steady-State Error
-    print(f"{'Steady-State Error - Az (µrad)':<40} {np.rad2deg(metrics_pid['ss_error_az'])*3600:<20.2f} {np.rad2deg(metrics_fl['ss_error_az'])*3600:<20.2f}")
-    print(f"{'Steady-State Error - El (µrad)':<40} {np.rad2deg(metrics_pid['ss_error_el'])*3600:<20.2f} {np.rad2deg(metrics_fl['ss_error_el'])*3600:<20.2f}")
+    print(f"{'Steady-State Error - Az (µrad)':<40} {metrics_pid['ss_error_az']*1e6:<15.2f} {metrics_fl['ss_error_az']*1e6:<15.2f} {metrics_ndob['ss_error_az']*1e6:<15.2f}")
+    print(f"{'Steady-State Error - El (µrad)':<40} {metrics_pid['ss_error_el']*1e6:<15.2f} {metrics_fl['ss_error_el']*1e6:<15.2f} {metrics_ndob['ss_error_el']*1e6:<15.2f}")
     
     # LOS Error
     los_rms_pid = results_pid['los_error_rms'] * 1e6
     los_rms_fl = results_fl['los_error_rms'] * 1e6
-    improvement_los = ((los_rms_pid - los_rms_fl) / los_rms_pid) * 100
-    print(f"{'LOS Error RMS (µrad)':<40} {los_rms_pid:<20.2f} {los_rms_fl:<20.2f} {improvement_los:<15.1f}%")
+    los_rms_ndob = results_ndob['los_error_rms'] * 1e6
+    improvement_los = ((los_rms_pid - los_rms_ndob) / (los_rms_pid + 1e-12)) * 100
+    print(f"{'LOS Error RMS (µrad)':<40} {los_rms_pid:<15.2f} {los_rms_fl:<15.2f} {los_rms_ndob:<15.2f} {improvement_los:<10.1f}%")
     
     # Final LOS Error
     los_final_pid = results_pid['los_error_final'] * 1e6
     los_final_fl = results_fl['los_error_final'] * 1e6
-    improvement_final = ((los_final_pid - los_final_fl) / los_final_pid) * 100 if los_final_pid > 0 else 0
-    print(f"{'LOS Error Final (µrad)':<40} {los_final_pid:<20.2f} {los_final_fl:<20.2f} {improvement_final:<15.1f}%")
+    los_final_ndob = results_ndob['los_error_final'] * 1e6
+    improvement_final = ((los_final_pid - los_final_ndob) / (los_final_pid + 1e-12)) * 100
+    print(f"{'LOS Error Final (µrad)':<40} {los_final_pid:<15.2f} {los_final_fl:<15.2f} {los_final_ndob:<15.2f} {improvement_final:<10.1f}%")
     
     # Torque effort
     torque_pid = np.sqrt(results_pid['torque_rms_az']**2 + results_pid['torque_rms_el']**2)
     torque_fl = np.sqrt(results_fl['torque_rms_az']**2 + results_fl['torque_rms_el']**2)
-    torque_change = ((torque_fl - torque_pid) / torque_pid) * 100
-    print(f"{'Total Torque RMS (N·m)':<40} {torque_pid:<20.3f} {torque_fl:<20.3f} {torque_change:+<15.1f}%")
+    torque_ndob = np.sqrt(results_ndob['torque_rms_az']**2 + results_ndob['torque_rms_el']**2)
+    torque_change = ((torque_ndob - torque_pid) / (torque_pid + 1e-12)) * 100
+    print(f"{'Total Torque RMS (N·m)':<40} {torque_pid:<15.3f} {torque_fl:<15.3f} {torque_ndob:<15.3f} {torque_change:+<10.1f}%")
     
     # FSM Saturation
     print(f"{'FSM Saturation (%)':<40} {results_pid['fsm_saturation_percent']:<20.1f} {results_fl['fsm_saturation_percent']:<20.1f}")
