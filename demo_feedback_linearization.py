@@ -163,14 +163,19 @@ def run_comparison_study():
             'ki': [5.0, 5.0],      # Integral for steady-state error rejection
             'enable_integral': True,  # Enable robust tracking
             'tau_max': [1.0, 1.0],
-            'tau_min': [-1.0, -1.0]
+            'tau_min': [-1.0, -1.0],
+            # CRITICAL: Friction compensation (must match plant friction!)
+            'friction_az': 0.1,    # N·m·s/rad - match plant default
+            'friction_el': 0.1     # N·m·s/rad - match plant default
         },
         dynamics_config={
             'pan_mass': 0.5,
             'tilt_mass': 0.25,
             'cm_r': 0.0,
             'cm_h': 0.0,
-            'gravity': 9.81
+            'gravity': 9.81,
+            'friction_az': 0.1,    # Explicitly set for clarity
+            'friction_el': 0.1     # Explicitly set for clarity
         }
     )
     

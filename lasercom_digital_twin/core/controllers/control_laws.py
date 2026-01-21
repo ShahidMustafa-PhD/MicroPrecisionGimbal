@@ -160,29 +160,40 @@ class CoarseGimbalController(BaseController):
             - 'tau_min': Minimum torque [N·m] (2-element array)
             - 'tau_rate_limit': Max torque rate [N·m/s]
             - 'anti_windup_gain': Back-calculation gain (typically 1/ki)
+            - 'derivative_filter_N': Derivative filter coefficient (typically 10-20)
             - 'setpoint_filter_wn': Setpoint filter natural frequency [rad/s]
             - 'setpoint_filter_zeta': Setpoint filter damping ratio
             - 'enable_derivative': Enable derivative term [bool]
         """
         super().__init__(config)
         
-        # PID gains (2-DOF: Az and El)
-        self.kp: np.ndarray = np.array(config.get('kp', [50.0, 50.0]))
-        self.ki: np.ndarray = np.array(config.get('ki', [10.0, 10.0]))
-        self.kd: np.ndarray = np.array(config.get('kd', [5.0, 5.0]))
+        # PID gains (2-DOF: Pan/Az and Tilt/El)
+        # Default to optimized gains from linearization-based design
+        # Pan axis: Higher inertia due to carrying tilt assembly
+        # Tilt axis: Lower inertia, requires proportionally lower gains
+        self.kp: np.ndarray = np.array(config.get('kp', [3.257, 0.661]))
+        self.ki: np.ndarray = np.array(config.get('ki', [10.232, 2.078]))
+        self.kd: np.ndarray = np.array(config.get('kd', [0.146599, 0.029709]))
         
         # Torque limits
         self.tau_max: np.ndarray = np.array(config.get('tau_max', [10.0, 10.0]))
         self.tau_min: np.ndarray = np.array(config.get('tau_min', [-10.0, -10.0]))
         self.tau_rate_limit: float = config.get('tau_rate_limit', 100.0)  # N·m/s
         
-        # Anti-windup configuration
+        # Anti-windup configuration (back-calculation method)
+        # Default: Kb = 1/Ti = Ki/Kp for proper anti-windup scaling
+        default_aw_gain = self.ki / (self.kp + 1e-10)
         self.anti_windup_gain: np.ndarray = np.array(
-            config.get('anti_windup_gain', [0.1, 0.1])  # Default: 1/ki
+            config.get('anti_windup_gain', default_aw_gain)
         )
         
+        # Derivative filter (low-pass to attenuate encoder noise)
+        # Transfer function: D_filtered(s) = (Kd*s) / (1 + s/(N*wc))
+        # Typical N = 10-20 for motion control
+        self.derivative_filter_N: float = config.get('derivative_filter_N', 15.0)
+        
         # Setpoint filter parameters
-        self.use_setpoint_filter: bool = config.get('use_setpoint_filter', True)
+        self.use_setpoint_filter: bool = config.get('use_setpoint_filter', False)
         self.filter_wn: float = config.get('setpoint_filter_wn', 10.0)  # rad/s
         self.filter_zeta: float = config.get('setpoint_filter_zeta', 0.7)
         
@@ -192,12 +203,19 @@ class CoarseGimbalController(BaseController):
         # Controller state
         self.integral: np.ndarray = np.zeros(2)  # Integral term
         self.previous_error: np.ndarray = np.zeros(2)  # For derivative
+        self.filtered_derivative: np.ndarray = np.zeros(2)  # Filtered D-term
         self.previous_output: np.ndarray = np.zeros(2)  # For rate limiting
         self.filtered_reference: np.ndarray = np.zeros(2)  # Filtered setpoint
         self.filter_state: np.ndarray = np.zeros(2)  # Filter state variable
+        self.previous_reference: np.ndarray = np.zeros(2)  # For reference velocity calculation
         
         # Saturation tracking
         self.saturation_active: np.ndarray = np.zeros(2, dtype=bool)
+        
+        # PID component logging (for debugging)
+        self.last_u_p: np.ndarray = np.zeros(2)
+        self.last_u_i: np.ndarray = np.zeros(2)
+        self.last_u_d: np.ndarray = np.zeros(2)
         
     def _apply_setpoint_filter(
         self,
@@ -337,18 +355,31 @@ class CoarseGimbalController(BaseController):
         # Integral term (using current integral state)
         u_i = self.ki * self.integral
         
-        # Derivative term
+        # Derivative term with low-pass filtering
         if self.enable_derivative:
             if velocity_estimate is not None:
-                # Use velocity estimate directly (preferred)
-                # Note: derivative of error = -derivative of measurement
-                # (assuming constant reference)
-                error_derivative = -velocity_estimate
+                # Compute reference velocity from finite difference
+                # CRITICAL: Must account for changing reference during slew maneuvers
+                reference_velocity = (reference_filtered - self.previous_reference) / (dt + 1e-10)
+                
+                # Correct derivative: error_derivative = desired_vel - actual_vel
+                error_derivative = reference_velocity - velocity_estimate
             else:
                 # Finite difference (derivative on measurement, not error)
                 error_derivative = (error - self.previous_error) / (dt + 1e-10)
             
-            u_d = self.kd * error_derivative
+            # Apply first-order low-pass filter to derivative term
+            # Discrete filter: D[k] = α*D[k-1] + (1-α)*Kd*de/dt
+            # where α = 1/(1 + N*wc*dt) and wc ≈ Ki/Kp (crossover freq)
+            omega_c = self.ki / (self.kp + 1e-10)  # Approximate crossover
+            alpha = 1.0 / (1.0 + self.derivative_filter_N * omega_c * dt)
+            
+            # Update filtered derivative
+            raw_derivative = self.kd * error_derivative
+            self.filtered_derivative = (alpha * self.filtered_derivative + 
+                                       (1.0 - alpha) * raw_derivative)
+            
+            u_d = self.filtered_derivative
         else:
             u_d = np.zeros(2)
             error_derivative = np.zeros(2)
@@ -377,6 +408,12 @@ class CoarseGimbalController(BaseController):
         # Update state
         self.previous_error = error.copy()
         self.previous_output = u_saturated.copy()
+        self.previous_reference = reference_filtered.copy()
+        
+        # Store PID components for logging
+        self.last_u_p = u_p.copy()
+        self.last_u_i = u_i.copy()
+        self.last_u_d = u_d.copy()
         
         # Metadata for logging and debugging
         metadata = {
@@ -387,7 +424,8 @@ class CoarseGimbalController(BaseController):
             'u_d': u_d,
             'integral': self.integral.copy(),
             'saturated': self.saturation_active.copy(),
-            'reference_filtered': reference_filtered
+            'reference_filtered': reference_filtered,
+            'gains': {'kp': self.kp, 'ki': self.ki, 'kd': self.kd}
         }
         
         return u_saturated, metadata
@@ -440,10 +478,14 @@ class CoarseGimbalController(BaseController):
         """
         self.integral = np.zeros(2)
         self.previous_error = np.zeros(2)
+        self.filtered_derivative = np.zeros(2)
         self.previous_output = np.zeros(2)
         self.filtered_reference = np.zeros(2)
         self.filter_state = np.zeros(2)
         self.saturation_active = np.zeros(2, dtype=bool)
+        self.last_u_p = np.zeros(2)
+        self.last_u_i = np.zeros(2)
+        self.last_u_d = np.zeros(2)
     
     def get_state(self) -> Dict:
         """
@@ -457,9 +499,13 @@ class CoarseGimbalController(BaseController):
         return {
                 'integral': self.integral.copy(),
                 'previous_error': self.previous_error.copy(),
+                'filtered_derivative': self.filtered_derivative.copy(),
                 'previous_output': self.previous_output.copy(),
                 'saturated': self.saturation_active.copy(),
-                'filtered_reference': self.filtered_reference.copy()
+                'filtered_reference': self.filtered_reference.copy(),
+                'u_p': self.last_u_p.copy(),
+                'u_i': self.last_u_i.copy(),
+                'u_d': self.last_u_d.copy()
             }
 
 
@@ -500,8 +546,10 @@ class FeedbackLinearizationController(BaseController):
             Controller configuration:
             - 'kp': Proportional gains [1/s²] (2-element for Az/El)
             - 'kd': Derivative gains [1/s] 
+            - 'ki': Integral gains [1/s³] (optional, for robust tracking)
             - 'tau_max': Maximum torque [N·m]
             - 'tau_min': Minimum torque [N·m]
+            - 'enable_integral': Enable integral action (default: False)
         dynamics_model : GimbalDynamics
             Instance of the physics model from gimbal_dynamics.py
             Must have methods: get_mass_matrix, get_coriolis_matrix, get_gravity_vector
@@ -509,9 +557,21 @@ class FeedbackLinearizationController(BaseController):
         super().__init__(config)
         self.dyn = dynamics_model
         
-        # PD Gains for the outer loop (linearized space)
+        # PID Gains for the outer loop (linearized space)
         self.kp = np.array(config.get('kp', [100.0, 100.0]))
         self.kd = np.array(config.get('kd', [20.0, 20.0]))
+        self.ki = np.array(config.get('ki', [10.0, 10.0]))
+        self.enable_integral = config.get('enable_integral', False)
+        
+        # Friction compensation coefficients (must match plant friction!)
+        # If the plant applies tau_net = tau_motor - D*dq, we must add D*dq to command
+        self.friction_az = config.get('friction_az', 0.0)  # N·m·s/rad
+        self.friction_el = config.get('friction_el', 0.0)  # N·m·s/rad
+        
+        # Disturbance compensation (from EKF estimates)
+        # WARNING: EKF disturbance estimates may be noisy/biased during transients
+        # Set to False for more robust behavior until EKF is properly tuned
+        self.enable_disturbance_compensation = config.get('enable_disturbance_compensation', False)
         
         # Actuator limits
         self.tau_max = np.array(config.get('tau_max', [10.0, 10.0]))
@@ -520,6 +580,7 @@ class FeedbackLinearizationController(BaseController):
         # State tracking
         self.previous_output = np.zeros(2)
         self.previous_error = np.zeros(2)
+        self.integral = np.zeros(2)
 
     def compute_control(
         self, 
@@ -589,10 +650,15 @@ class FeedbackLinearizationController(BaseController):
             state_estimate['theta_dot_az'], 
             state_estimate['theta_dot_el']
         ])
-        d_hat = np.array([
-            state_estimate['dist_az'], 
-            state_estimate['dist_el']
-        ])
+        
+        # Disturbance estimates from EKF (only used if enabled)
+        if self.enable_disturbance_compensation:
+            d_hat = np.array([
+                state_estimate['dist_az'], 
+                state_estimate['dist_el']
+            ])
+        else:
+            d_hat = np.zeros(2)  # Ignore EKF disturbance estimates
 
         # 2. Compute Linearizing Terms (Physics cancellation)
         # These methods are from GimbalDynamics in dynamics/gimbal_dynamics.py
@@ -604,24 +670,46 @@ class FeedbackLinearizationController(BaseController):
         error = q_ref - q
         error_dot = dq_ref - dq
         
+        # Update integral if enabled
+        if self.enable_integral:
+            self.integral += error * dt
+            # Simple anti-windup: clamp integral
+            integral_max = 1.0  # rad·s
+            self.integral = np.clip(self.integral, -integral_max, integral_max)
+        
         # Virtual control input (desired acceleration in linearized coordinates)
         # This is the "v" in the standard feedback linearization formulation
-        v = ddq_ref + self.kd * error_dot + self.kp * error
+        # PID outer loop: v = Kp*e + Kd*de + Ki*∫e
+        v = ddq_ref + self.kp * error + self.kd * error_dot
+        if self.enable_integral:
+            v += self.ki * self.integral
 
-        # 4. Nonlinear Inverse Dynamics
+        # 4. Nonlinear Inverse Dynamics with Disturbance Compensation
         # Transform virtual control to actual torque by inverting the dynamics
-        # tau = M*v + C*dq + G - d_hat
+        # tau = M*v + C*dq + G + D*dq - d_hat
         # 
         # Explanation:
         # - M*v: Inertial torque needed for desired acceleration
-        # - C*dq: Compensation for Coriolis/centrifugal effects
-        # - G: Compensation for gravity torque
+        # - C*dq: Compensation for Coriolis/centrifugal effects (added directly, NOT multiplied by M)
+        # - G: Compensation for gravity torque (added directly, NOT multiplied by M)
+        # - D*dq: Compensation for viscous friction (CRITICAL - plant applies tau_net = tau - D*dq)
         # - d_hat: Feedforward compensation for estimated disturbances
-        tau_linearizing = M @ v + C @ dq + G
-        tau_command = tau_linearizing - d_hat
+        # 
+        # CRITICAL: The control law is tau = M(q)*v + C(q,dq)*dq + G(q) + D*dq - d_hat
+        # NOT tau = M(q)*(v + C*dq + G - d_hat)
+        # The C, G, D, and d_hat terms are FORCES/TORQUES that must be added to M*v,
+        # not pseudo-accelerations to be multiplied by M!
+        
+        # Friction compensation (must match plant friction model!)
+        # The plant applies: tau_net = tau_motor - friction * dq
+        # So we must add friction * dq to compensate
+        friction_comp = np.array([self.friction_az * dq[0], self.friction_el * dq[1]])
+        
+        # Commanded torque (CORRECT FORMULATION with friction compensation)
+        tau = M @ v + C @ dq + G + friction_comp - d_hat
 
         # 5. Apply Actuator Saturation
-        u_saturated = np.clip(tau_command, self.tau_min, self.tau_max)
+        u_saturated = np.clip(tau, self.tau_min, self.tau_max)
         
         # Update state
         self.previous_output = u_saturated.copy()
@@ -635,9 +723,10 @@ class FeedbackLinearizationController(BaseController):
             'M_matrix': M,
             'C_term': C @ dq,
             'G_term': G,
+            'friction_comp': friction_comp,
             'dist_compensated': d_hat,
-            'tau_unsaturated': tau_command,
-            'saturation_active': np.any(u_saturated != tau_command)
+            'tau_unsaturated': tau,
+            'saturation_active': np.any(u_saturated != tau)
         }
 
         return u_saturated, metadata
@@ -646,6 +735,7 @@ class FeedbackLinearizationController(BaseController):
         """Reset controller state."""
         self.previous_output = np.zeros(2)
         self.previous_error = np.zeros(2)
+        self.integral = np.zeros(2)
 
     def get_state(self) -> Dict:
         """Get current controller state."""
