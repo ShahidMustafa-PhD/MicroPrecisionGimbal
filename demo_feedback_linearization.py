@@ -115,7 +115,7 @@ def run_comparison_study():
             # These gains are now correct after fixing the derivative term bug
             'kp': [3.257, 0.660],    # Per-axis: [Pan, Tilt]
             'ki': [10.232, 2.074],   # Designed for 5 Hz bandwidth
-            'kd': [0.146599, 0.029709],  # Corrected Kd values (40% higher than before)
+            'kd': [0.1046599, 0.021709],  # Corrected Kd values (40% higher than before)
             'anti_windup_gain': 1.0,
             'tau_rate_limit': 50.0,
             'enable_derivative': True  # Now works correctly with fixed implementation
@@ -126,7 +126,7 @@ def run_comparison_study():
     runner_pid = DigitalTwinRunner(config_pid)
     print("Running simulation...\n")
 
-    results_pid = runner_pid.run_simulation(duration=duration)
+    #results_pid = runner_pid.run_simulation(duration=duration)
     
     # =========================================================================
     # Test 2: Feedback Linearization Controller
@@ -155,8 +155,13 @@ def run_comparison_study():
             'harmonics': [(1.0, 1.0), (2.1, 0.3)]
         },
         feedback_linearization_config={
-            'kp': [300.0, 300.0],  # Higher gains stable due to linearization
-            'kd': [30.0, 30.0],
+            # Gains tuned for tau_max=1.0 Nm and inertia~0.003 kg·m²
+            # Natural frequency ωn = sqrt(Kp*M) ≈ sqrt(50/0.003) ≈ 130 rad/s ≈ 20 Hz
+            # Damping ratio ζ = Kd/(2*sqrt(Kp*M)) ≈ 5/(2*sqrt(50*0.003)) ≈ 0.65
+            'kp': [50.0, 50.0],    # Reduced from 150 to avoid saturation
+            'kd': [5.0, 5.0],      # Reduced proportionally for critical damping
+            'ki': [5.0, 5.0],      # Integral for steady-state error rejection
+            'enable_integral': True,  # Enable robust tracking
             'tau_max': [1.0, 1.0],
             'tau_min': [-1.0, -1.0]
         },
