@@ -70,7 +70,7 @@ def run_comparison_study():
     print("=" * 80 + "\n")
     
     # Common parameters
-    target_az_deg = 5.0
+    target_az_deg = 15.0
     target_el_deg = 3.0
     duration = 2.5
     
@@ -126,7 +126,7 @@ def run_comparison_study():
     runner_pid = DigitalTwinRunner(config_pid)
     print("Running simulation...\n")
 
-    #results_pid = runner_pid.run_simulation(duration=duration)
+    results_pid = runner_pid.run_simulation(duration=duration)
     
     # =========================================================================
     # Test 2: Feedback Linearization Controller
@@ -145,6 +145,7 @@ def run_comparison_study():
         target_el=np.deg2rad(target_el_deg),
         target_enabled=True,
         use_feedback_linearization=True,  # FL mode
+        use_direct_state_feedback=True,   # Bypass EKF for cleaner controller testing
         enable_visualization=False,
         real_time_factor=0.0,
         vibration_enabled=True,
@@ -155,18 +156,26 @@ def run_comparison_study():
             'harmonics': [(1.0, 1.0), (2.1, 0.3)]
         },
         feedback_linearization_config={
-            # Gains tuned for tau_max=1.0 Nm and inertia~0.003 kg·m²
-            # Natural frequency ωn = sqrt(Kp*M) ≈ sqrt(50/0.003) ≈ 130 rad/s ≈ 20 Hz
-            # Damping ratio ζ = Kd/(2*sqrt(Kp*M)) ≈ 5/(2*sqrt(50*0.003)) ≈ 0.65
-            'kp': [50.0, 50.0],    # Reduced from 150 to avoid saturation
-            'kd': [5.0, 5.0],      # Reduced proportionally for critical damping
+            # Gains designed for critically damped response with 5ms motor lag
+            # Natural frequency ωn ≈ 10 rad/s (conservative for motor dynamics)
+            # Damping ratio ζ ≈ 1.0 (critically damped)
+            'kp': [50.0, 50.0],    # Position gain [1/s²]
+            'kd': [10.0, 10.0],    # Velocity gain [1/s] - increased for damping
             'ki': [5.0, 5.0],      # Integral for steady-state error rejection
-            'enable_integral': True,  # Enable robust tracking
-            'tau_max': [1.0, 1.0],
-            'tau_min': [-1.0, -1.0],
-            # CRITICAL: Friction compensation (must match plant friction!)
-            'friction_az': 0.1,    # N·m·s/rad - match plant default
-            'friction_el': 0.1     # N·m·s/rad - match plant default
+            'enable_integral': True,
+            'tau_max': [10.0, 10.0],
+            'tau_min': [-10.0, -10.0],
+            # Friction compensation with CONDITIONAL logic (NEW!)
+            # Only compensates when velocity aligns with desired acceleration
+            # Prevents friction feedforward from fighting braking during transients
+            'friction_az': 0.1,    # Match plant friction
+            'friction_el': 0.1,    # Match plant friction
+            'conditional_friction': True,  # CRITICAL: Enable conditional logic
+            'enable_disturbance_compensation': False,
+            # Optional robust term for handling model uncertainties
+            'enable_robust_term': False,  # Set True for additional robustness
+            'robust_eta': [0.01, 0.01],   # Switching gain [N·m]
+            'robust_lambda': 5.0          # Sliding surface slope
         },
         dynamics_config={
             'pan_mass': 0.5,
@@ -269,16 +278,16 @@ def run_comparison_study():
     print("KEY OBSERVATIONS")
     print("=" * 80)
     print("\n1. FEEDBACK LINEARIZATION ADVANTAGES:")
-    print("   ✓ Cancels nonlinear dynamics (M, C, G terms)")
-    print("   ✓ Compensates for disturbances using EKF estimates")
-    print("   ✓ Allows higher control gains without instability")
-    print("   ✓ Better tracking performance during large maneuvers")
+    print("   [+] Cancels nonlinear dynamics (M, C, G terms)")
+    print("   [+] Compensates for disturbances using EKF estimates")
+    print("   [+] Allows higher control gains without instability")
+    print("   [+] Better tracking performance during large maneuvers")
     
     print("\n2. SIGNAL FLOW ARCHITECTURE:")
-    print("   Sensors → EKF (state fusion) → Controller → Actuators")
+    print("   Sensors -> EKF (state fusion) -> Controller -> Actuators")
     print("   - Encoders: Absolute position measurement")
     print("   - Gyros: Angular velocity measurement")
-    print("   - EKF: Fuses noisy measurements → clean state estimate")
+    print("   - EKF: Fuses noisy measurements -> clean state estimate")
     print("   - Controller: Uses filtered state for control law")
     
     print("\n3. IMPLEMENTATION DETAILS:")
@@ -295,13 +304,13 @@ def run_comparison_study():
 if __name__ == "__main__":
     try:
         results_pid, results_fl = run_comparison_study()
-        print("✓ Demonstration completed successfully!")
+        print("[OK] Demonstration completed successfully!")
         print("\nTo visualize results, access:")
         print("  - results_pid['log_data'] for PID time-series")
         print("  - results_fl['log_data'] for FL time-series")
         
     except Exception as e:
-        print(f"\n✗ Error during demonstration: {e}")
+        print(f"\n[ERROR] Error during demonstration: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

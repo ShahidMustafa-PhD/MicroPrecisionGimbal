@@ -88,6 +88,7 @@ class SimulationConfig:
     
     # Controller selection
     use_feedback_linearization: bool = False  # Use FL controller instead of PID
+    use_direct_state_feedback: bool = False   # Bypass EKF, use true state (for debugging)
     
     # Component configs
     dynamics_config: Dict = field(default_factory=dict)
@@ -102,6 +103,19 @@ class SimulationConfig:
     fsm_controller_config: Dict = field(default_factory=dict)
     optics_config: Dict = field(default_factory=dict)
     frame_config: Dict = field(default_factory=dict)
+    
+    # Vibration injection (Mast/Base Motion)
+    vibration_enabled: bool = False
+    vibration_config: Dict = field(default_factory=lambda: {
+        'start_time': 1.0,             # Time to start vibration [s]
+        'frequency_hz': 20.0,          # Vibration frequency [Hz]
+        'amplitude_rad': 50e-6,        # Amplitude [rad] (e.g. 50 µrad)
+        'harmonics': [                 # Optional: List of (freq_mult, amp_scale)
+            (1.0, 1.0),
+            (2.5, 0.3),                # Higher frequency harmonic
+            (5.0, 0.1)
+        ]
+    })
 
 
 @dataclass
@@ -204,14 +218,22 @@ class DigitalTwinRunner:
         self.last_qpd_update: float = 0.0
         self.last_log_time: float = 0.0
         
-        # Set physical parameters from config
-        self.pan_mass = getattr(config, 'pan_mass', 0.5)
-        self.tilt_mass = getattr(config, 'tilt_mass', 0.25)
-        self.cm_r = getattr(config, 'cm_r', 0.002)
-        self.cm_h = getattr(config, 'cm_h', 0.005)
-        self.gravity = getattr(config, 'gravity', 9.81)
-        self.friction_az = getattr(config, 'friction_az', 0.1)
-        self.friction_el = getattr(config, 'friction_el', 0.1)
+        # Set physical parameters from config (configuration-driven; no hardcoding)
+        # CM offsets set to 0 by default for simpler controller tuning; add via config for realism
+        dynamics_cfg = self.config.dynamics_config or {}
+        self.pan_mass = dynamics_cfg.get('pan_mass', 0.5)
+        self.tilt_mass = dynamics_cfg.get('tilt_mass', 0.25)
+        self.cm_r = dynamics_cfg.get('cm_r', 0.0)    # Zero CM offset by default
+        self.cm_h = dynamics_cfg.get('cm_h', 0.0)    # Zero CM offset by default
+        self.gravity = dynamics_cfg.get('gravity', 9.81)
+        self.friction_az = dynamics_cfg.get('friction_az', 0.1)
+        self.friction_el = dynamics_cfg.get('friction_el', 0.1)
+
+        # Actuator command hold (multi-rate ZOH)
+        self.voltage_cmd_az: float = 0.0
+        self.voltage_cmd_el: float = 0.0
+        self.last_tau_cmd: np.ndarray = np.zeros(2)
+        self.last_coarse_meta: Dict = {}
         
         # Initialize GimbalDynamics
         self.dynamics = GimbalDynamics(
@@ -296,13 +318,11 @@ class DigitalTwinRunner:
                 raise RuntimeError(f"Failed to initialize MuJoCo dynamics: {str(e)}") from e
         
         if not self.use_mujoco:
-            # Simplified dynamics model
-            self.inertia_az = 0.20  # kg·m²
-            self.inertia_el = 0.15  # kg·m²
-            self.friction_az = 0.05  # N·m·s/rad
-            self.friction_el = 0.05  # N·m·s/rad
+            # Simplified dynamics model - use config values, not hardcoded!
+            # NOTE: inertia_az, inertia_el, friction_az, friction_el are already
+            # set from dynamics_config earlier in __init__. Don't overwrite them!
             
-            # State variables
+            # State variables (initial conditions)
             self.q_az = 0.0
             self.q_el = 0.0
             self.qd_az = 0.0
@@ -311,20 +331,29 @@ class DigitalTwinRunner:
     def _init_actuators(self) -> None:
         """Initialize motor and FSM actuator models."""
         # Gimbal motors (Az/El)
+        # Motor electrical time constant τ_e = L/R determines response speed.
+        # With L=0.01H, R=2.0Ω: τ_e = 5ms, compatible with 10ms coarse control rate.
+        # Larger L causes phase lag between commanded and actual torque, leading to overshoot.
+        # Cogging disabled by default for cleaner controller tuning; enable via config.
         motor_config = self.config.motor_config or {
             'R': 2.0,
-            'L': 0.05,  # Increased from 0.005 to prevent numerical instability
+            'L': 0.01,  # τ_e = L/R = 5ms, balances response speed vs numerical stability
             'K_t': 0.5,
             'K_e': 0.5,
             'tau_max': 10.0,
             'tau_min': -10.0,
-            'cogging_amplitude': 0.05,
+            'cogging_amplitude': 0.0,  # Disabled by default; set >0 for realism
             'cogging_frequency': 10,
             'seed': self.config.seed
         }
         
         self.motor_az = GimbalMotorModel(motor_config)
         self.motor_el = GimbalMotorModel(motor_config)
+
+        # Cache motor constants for torque↔voltage mapping convenience
+        self._motor_R = float(motor_config.get('R', 1.0))
+        self._motor_Kt = float(motor_config.get('K_t', 0.1))
+        self._motor_Ke = float(motor_config.get('K_e', 0.1))
         
         # Fast Steering Mirror - High-Fidelity State-Space Model
         # Option 1: Use factory function (recommended)
@@ -416,12 +445,21 @@ class DigitalTwinRunner:
     
     def _init_estimator(self) -> None:
         """Initialize Extended Kalman Filter."""
+        # Get dynamics parameters from config to match plant dynamics
+        dynamics_cfg = self.config.dynamics_config or {}
+        
         estimator_config = self.config.estimator_config or {
             'initial_state': np.zeros(10),
             'inertia_az': self.inertia_az,
             'inertia_el': self.inertia_el,
             'friction_coeff_az': self.friction_az,
             'friction_coeff_el': self.friction_el,
+            # Pass dynamics parameters so EKF uses same model as plant
+            'pan_mass': dynamics_cfg.get('pan_mass', 0.5),
+            'tilt_mass': dynamics_cfg.get('tilt_mass', 0.25),
+            'cm_r': dynamics_cfg.get('cm_r', 0.0),  # Match plant default
+            'cm_h': dynamics_cfg.get('cm_h', 0.0),  # Match plant default  
+            'gravity': dynamics_cfg.get('gravity', 9.81),
             'process_noise_std': [1e-8, 1e-6, 1e-9, 1e-8, 1e-6, 1e-9, 1e-7, 1e-6, 1e-4, 1e-4],
             'measurement_noise_std': [2.4e-5, 2.4e-5, 1e-6, 1e-6, 1e-4, 1e-4]
         }
@@ -430,15 +468,11 @@ class DigitalTwinRunner:
     
     def _init_controllers(self) -> None:
         """Initialize hierarchical control system."""
-        # Initialize gimbal dynamics model (needed for feedback linearization)
-        dynamics_config = self.config.dynamics_config or {
-            'pan_mass': 0.5,
-            'tilt_mass': 0.25,
-            'cm_r': 0.02,
-            'cm_h': 0.005,
-            'gravity': 9.81
-        }
-        self.gimbal_dynamics = GimbalDynamics(**dynamics_config)
+        # CRITICAL: Use the SAME dynamics instance for both plant and controller
+        # to ensure perfect model matching for feedback linearization.
+        # The self.dynamics object was already initialized in __init__ with the
+        # correct parameters from config.dynamics_config.
+        self.gimbal_dynamics = self.dynamics
         
         # Select coarse controller type
         if self.config.use_feedback_linearization:
@@ -446,6 +480,8 @@ class DigitalTwinRunner:
             fl_config = self.config.feedback_linearization_config or {
                 'kp': [100.0, 100.0],
                 'kd': [20.0, 20.0],
+                'ki': [10.0, 10.0],
+                'enable_integral': False,
                 'tau_max': [10.0, 10.0],
                 'tau_min': [-10.0, -10.0]
             }
@@ -510,6 +546,15 @@ class DigitalTwinRunner:
             'z_qpd_nes_x', 'z_qpd_nes_y',
             'los_error_x', 'los_error_y',
             'target_az', 'target_el'
+            ,
+            # Coarse-loop diagnostics (available for PID; best-effort for FL)
+            'coarse_tau_cmd_az', 'coarse_tau_cmd_el',
+            'coarse_v_cmd_az', 'coarse_v_cmd_el',
+            'coarse_error_az', 'coarse_error_el',
+            'pid_u_p_az', 'pid_u_p_el',
+            'pid_u_i_az', 'pid_u_i_el',
+            'pid_u_d_az', 'pid_u_d_el',
+            'pid_saturated_az', 'pid_saturated_el'
         ]
     
     def _step_dynamics(self, dt: float) -> None:
@@ -523,6 +568,22 @@ class DigitalTwinRunner:
         dt : float
             Timestep [s]
         """
+        # Step motor electrical dynamics at dt_sim (voltage command is ZOH at dt_coarse)
+        # This avoids scaling issues (tau->voltage) and keeps actuator dynamics consistent
+        # with the fast physics integration loop.
+        self.state.torque_az = self.motor_az.step(
+            self.voltage_cmd_az,
+            self.state.qd_az,
+            self.state.q_az,
+            dt
+        )
+        self.state.torque_el = self.motor_el.step(
+            self.voltage_cmd_el,
+            self.state.qd_el,
+            self.state.q_el,
+            dt
+        )
+
         if self.use_mujoco:
             with self.mj_data_lock:
                 # MuJoCo integration
@@ -612,16 +673,57 @@ class DigitalTwinRunner:
             self._update_qpd_measurement()
             self.last_qpd_update = self.time
     
+    def _compute_vibration(self, t: float) -> Tuple[float, float]:
+        """
+        Compute mast vibration (jitter) at current time `t`.
+        
+        Simulates structural vibration of the mounting mast/base.
+        Returns base rotation angles [vib_az, vib_el] in radians.
+        """
+        if not self.config.vibration_enabled:
+            return 0.0, 0.0
+            
+        cfg = self.config.vibration_config
+        start_time = cfg.get('start_time', 0.0)
+        
+        if t < start_time:
+            return 0.0, 0.0
+            
+        # Time relative to vibration start
+        dt = t - start_time
+        base_freq = cfg.get('frequency_hz', 10.0)
+        base_amp = cfg.get('amplitude_rad', 0.0)
+        harmonics = cfg.get('harmonics', [(1.0, 1.0)])
+        
+        vib_az = 0.0
+        vib_el = 0.0
+        
+        # Sum harmonics
+        for freq_mult, amp_mult in harmonics:
+            omega = 2 * np.pi * base_freq * freq_mult
+            # Azimuth and Elevation typically oscillate with some phase diff
+            # and different mode shapes. Simplified here.
+            vib_az += base_amp * amp_mult * np.sin(omega * dt)
+            vib_el += base_amp * amp_mult * np.cos(omega * dt)  # 90 deg phase offset
+            
+        return vib_az, vib_el
+
     def _update_qpd_measurement(self) -> None:
         """
         Compute QPD measurement through optical chain.
         
-        Flow: Gimbal angles → LOS error → FSM correction → Focal plane → QPD
+        Flow: Gimbal angles + Vibration → LOS error → FSM correction → Focal plane → QPD
         """
+        # Calculate base vibration (Mast Jitter)
+        # This represents the inertial motion of the base structure
+        vib_az, vib_el = self._compute_vibration(self.time)
+
         # Compute pointing error
         if self.config.target_enabled:
-            error_az = self.config.target_az - self.state.q_az
-            error_el = self.config.target_el - self.state.q_el
+            # Error = Target (Inertial) - Pointing (Inertial)
+            # Pointing (Inertial) = Gimbal_Angle (Relative) + Base_Vibration
+            error_az = self.config.target_az - (self.state.q_az + vib_az)
+            error_el = self.config.target_el - (self.state.q_el + vib_el)
         else:
             error_az = 0.0
             error_el = 0.0
@@ -700,8 +802,22 @@ class DigitalTwinRunner:
         # Compute control based on controller type
         if self.config.use_feedback_linearization:
             # Feedback Linearization Controller
-            # Get full state estimate dictionary from EKF
-            fused_state = self.estimator.get_fused_state()
+            # Check if using direct state feedback (bypassing EKF) for debugging
+            use_direct_state = getattr(self.config, 'use_direct_state_feedback', False)
+            
+            if use_direct_state:
+                # Use TRUE state directly (perfect observer for debugging)
+                fused_state = {
+                    'theta_az': self.q_az,
+                    'theta_el': self.q_el,
+                    'theta_dot_az': self.qd_az,
+                    'theta_dot_el': self.qd_el,
+                    'dist_az': 0.0,
+                    'dist_el': 0.0
+                }
+            else:
+                # Get full state estimate dictionary from EKF (normal operation)
+                fused_state = self.estimator.get_fused_state()
             
             tau_cmd, meta = self.coarse_controller.compute_control(
                 q_ref=setpoint,
@@ -730,33 +846,25 @@ class DigitalTwinRunner:
         # Extract Az/El torques
         tau_az = tau_cmd[0]
         tau_el = tau_cmd[1]
+
+        # Save diagnostics for logging
+        self.last_tau_cmd = np.array([tau_az, tau_el], dtype=float)
+        self.last_coarse_meta = meta or {}
         
         # Store for FSM controller
         self.coarse_residual = residual_error
         
-        # Update motor models with voltage commands
-        # Convert torque command to voltage (simplified: τ = K_t * I, V = R * I)
-        # V ≈ τ / K_t * R (ignoring inductance for steady-state)
-        voltage_az = tau_az
-        voltage_el = tau_el
-        
-        # Step motor models
-        actual_tau_az = self.motor_az.step(
-            voltage_az,
-            self.state.qd_az,
-            self.state.q_az,
-            self.config.dt_coarse
-        )
-        actual_tau_el = self.motor_el.step(
-            voltage_el,
-            self.state.qd_el,
-            self.state.q_el,
-            self.config.dt_coarse
-        )
-        
-        # Update state
-        self.state.torque_az = actual_tau_az
-        self.state.torque_el = actual_tau_el
+        # Update motor voltage commands (held constant until next coarse update)
+        # Torque-to-voltage mapping (steady-state inversion):
+        #   tau ≈ Kt * i
+        #   v ≈ R*i + Ke*omega
+        # Note: inductance dynamics are handled inside GimbalMotorModel.step() at dt_sim.
+        Kt_safe = self._motor_Kt if abs(self._motor_Kt) > 1e-12 else 1e-12
+        i_cmd_az = tau_az / Kt_safe
+        i_cmd_el = tau_el / Kt_safe
+
+        self.voltage_cmd_az = self._motor_R * i_cmd_az + self._motor_Ke * self.state.qd_az
+        self.voltage_cmd_el = self._motor_R * i_cmd_el + self._motor_Ke * self.state.qd_el
     
     def _update_fine_controller(self) -> None:
         """
@@ -764,11 +872,12 @@ class DigitalTwinRunner:
         
         Signal Flow Architecture:
         -------------------------
-        1. Error Sensing: Retrieve LOS error from QPD or target reference
-        2. PIDF Compensation: Compute control command with derivative filtering
-        3. Command Saturation: Apply VCA voltage limits
-        4. State-Space Propagation: Integrate 4th-order dynamics using RK4
-        5. Output Mapping: Extract optical angles from modal states
+        1. FOV CHECK: Is the beam on the QPD sensor?
+        2. Error Sensing: Retrieve LOS error from QPD or target reference
+        3. PIDF Compensation: Compute control command with derivative filtering
+        4. Command Saturation: Apply VCA voltage limits
+        5. State-Space Propagation: Integrate 4th-order dynamics using RK4
+        6. Output Mapping: Extract optical angles from modal states
         
         Physics Model:
         -------------
@@ -785,53 +894,111 @@ class DigitalTwinRunner:
         dt = self.config.dt_fine
         
         # ====================================================================
+        # STEP 0: FOV GATING (PHYSICS CHECK)
+        # ====================================================================
+        # Determine the QPD Field of View threshold.
+        # Typically defined by the linear range in QPD config.
+        # If not explicit, we assume ~2 mrad for a standard QPD.
+        qpd_fov_rad = self.config.qpd_config.get('linear_range', 0.015) if self.config.qpd_config else 0.015
+        
+        # Calculate the coarse pointing error to see if spot is on detector
+        # We look at the error BEFORE FSM correction to see if it even hits the mirror assembly/sensor
+        # Includes MAST VIBRATION in the truth check
+        vib_az, vib_el = self._compute_vibration(self.time)
+        
+        if self.config.target_enabled:
+            # True Inertial Pointing Error = Target - (Gimbal + Base_Vibration)
+            coarse_error_az = self.config.target_az - (self.state.q_az + vib_az)
+            coarse_error_el = self.config.target_el - (self.state.q_el + vib_el)
+            
+            # Magnitude of coarse error
+            coarse_error_mag = np.sqrt(coarse_error_az**2 + coarse_error_el**2)
+            
+            # Logic: If coarse error > FOV, the QPD sees NOTHING (or background noise).
+            # The FSM controller cannot operate on "truth" data it doesn't have.
+            is_beam_on_sensor = coarse_error_mag < qpd_fov_rad
+        else:
+            # If no target, we assume we are relying purely on sensor noise/inputs
+            # (Or manually checking vibration magnitude vs FOV, but usually assumed ON in test mode)
+            is_beam_on_sensor = True
+
+        # ====================================================================
         # STEP 1: ERROR SENSING
         # ====================================================================
-        # Compute Line-of-Sight (LOS) error in optical frame
-        if self.config.target_enabled:
-            # Pointing error from gimbal (coarse stage)
-            error_az = self.config.target_az - self.state.q_az
-            error_el = self.config.target_el - self.state.q_el
+        
+        total_error_tip = 0.0
+        total_error_tilt = 0.0
+        
+        if is_beam_on_sensor and self.config.target_enabled:
+            # Beam is ON PIXEL. FSM Control is ACTIVE.
+            
+            # Pointing error from coarse stage (+ vibration)
+            error_az = coarse_error_az
+            error_el = coarse_error_el
             
             # FSM must correct for residual error
             # Note: 2× factor because mirror deflection doubles the beam angle
+            # We treat the FSM frame as aligned with the Error frame for this simulation
             residual_tip = error_az - 2.0 * self.state.fsm_tip
             residual_tilt = error_el - 2.0 * self.state.fsm_tilt
+            
+            # Mix with QPD noise (simulating sensor reading)
+            qpd_to_angle = 1e-5 
+            qpd_noise_tip = self.state.z_qpd_nes_x * qpd_to_angle
+            qpd_noise_tilt = self.state.z_qpd_nes_y * qpd_to_angle
+            
+            # In a real system, the inputs are just qpd_noise_tip/tilt (the measurement).
+            # Here we combine truth + noise for the simulation model
+            total_error_tip = residual_tip + qpd_noise_tip
+            total_error_tilt = residual_tilt + qpd_noise_tilt
+            
+        elif not self.config.target_enabled:
+             # Legacy/Test mode without target
+            qpd_to_angle = 1e-5 
+            total_error_tip = self.state.z_qpd_nes_x * qpd_to_angle
+            total_error_tilt = self.state.z_qpd_nes_y * qpd_to_angle
+            
         else:
-            # No target - use QPD error directly
-            residual_tip = 0.0
-            residual_tilt = 0.0
-        
-        # QPD measures residual error (normalized error signal)
-        # Convert NES to angular error (simplified model)
-        qpd_to_angle = 1e-5  # NES to radians conversion factor
-        qpd_error_tip = self.state.z_qpd_nes_x * qpd_to_angle
-        qpd_error_tilt = self.state.z_qpd_nes_y * qpd_to_angle
-        
-        # Combine with computed residual (sensor fusion)
-        total_error_tip = residual_tip + qpd_error_tip
-        total_error_tilt = residual_tilt + qpd_error_tilt
-        
+            # Beam is OFF SENSOR.
+            # Controller sees 0 error (or specific "searching" pattern, but here 0).
+            # It should NOT try to correct a 30 degree error.
+            total_error_tip = 0.0
+            total_error_tilt = 0.0
+
         # ====================================================================
         # STEP 2: PIDF COMPENSATION
         # ====================================================================
-        # Use high-performance PIDF controller or legacy controller
-        if hasattr(self, 'fsm_pid') and self.fsm_pid is not None:
-            # New PIDF controller with derivative filtering
-            setpoint = np.array([0.0, 0.0])  # Target: null the error
-            measurement = np.array([-total_error_tip, -total_error_tilt])  # Negative for error correction
-            
-            # Compute control command (includes P, I, filtered D, anti-windup)
-            u_cmd = self.fsm_pid.update(setpoint, measurement, dt)
+        
+        u_cmd = np.zeros(2)
+
+        # Only run full control logic if beam is on sensor or we are in a test mode
+        if is_beam_on_sensor or not self.config.target_enabled:
+            # Use high-performance PIDF controller or legacy controller
+            if hasattr(self, 'fsm_pid') and self.fsm_pid is not None:
+                # New PIDF controller with derivative filtering
+                setpoint = np.array([0.0, 0.0])  # Target: null the error
+                measurement = np.array([-total_error_tip, -total_error_tilt])  # Negative for error correction
+                
+                # Compute control command
+                u_cmd = self.fsm_pid.update(setpoint, measurement, dt)
+            else:
+                # Legacy controller fallback
+                qpd_error = np.array([self.state.z_qpd_nes_x, self.state.z_qpd_nes_y])
+                fsm_cmd, fsm_meta = self.fsm_controller.compute_control(
+                    qpd_error,
+                    dt,
+                    coarse_residual=self.coarse_residual if hasattr(self, 'coarse_residual') else None
+                )
+                u_cmd = np.array([fsm_cmd[0], fsm_cmd[1]])
         else:
-            # Legacy controller fallback
-            qpd_error = np.array([self.state.z_qpd_nes_x, self.state.z_qpd_nes_y])
-            fsm_cmd, fsm_meta = self.fsm_controller.compute_control(
-                qpd_error,
-                dt,
-                coarse_residual=self.coarse_residual if hasattr(self, 'coarse_residual') else None
-            )
-            u_cmd = np.array([fsm_cmd[0], fsm_cmd[1]])
+            # Beam off sensor: 
+            # Ideally, we center the FSM to be ready for acquisition
+            # P-gain on FSM position only (centering spring)
+            # Or simply zero command if the plant has restoring force (flexures usually do)
+            u_cmd = np.array([0.0, 0.0])
+            
+            # Reset integrator in PID to prevent windup while waiting for beam?
+            # self.fsm_pid.reset() # Optional: Good practice for acquisition logic
         
         # ====================================================================
         # STEP 3: COMMAND SATURATION (VCA Voltage Limits)
@@ -932,6 +1099,30 @@ class DigitalTwinRunner:
             self.log_data['los_error_y'].append(self.state.los_error_y)
             self.log_data['target_az'].append(self.config.target_az)
             self.log_data['target_el'].append(self.config.target_el)
+
+            # Coarse-loop diagnostics (best-effort)
+            self.log_data['coarse_tau_cmd_az'].append(float(self.last_tau_cmd[0]))
+            self.log_data['coarse_tau_cmd_el'].append(float(self.last_tau_cmd[1]))
+            self.log_data['coarse_v_cmd_az'].append(float(self.voltage_cmd_az))
+            self.log_data['coarse_v_cmd_el'].append(float(self.voltage_cmd_el))
+
+            err = self.last_coarse_meta.get('error', np.zeros(2))
+            self.log_data['coarse_error_az'].append(float(err[0]))
+            self.log_data['coarse_error_el'].append(float(err[1]))
+
+            u_p = self.last_coarse_meta.get('u_p', np.zeros(2))
+            u_i = self.last_coarse_meta.get('u_i', np.zeros(2))
+            u_d = self.last_coarse_meta.get('u_d', np.zeros(2))
+            sat = self.last_coarse_meta.get('saturated', np.zeros(2, dtype=bool))
+
+            self.log_data['pid_u_p_az'].append(float(u_p[0]))
+            self.log_data['pid_u_p_el'].append(float(u_p[1]))
+            self.log_data['pid_u_i_az'].append(float(u_i[0]))
+            self.log_data['pid_u_i_el'].append(float(u_i[1]))
+            self.log_data['pid_u_d_az'].append(float(u_d[0]))
+            self.log_data['pid_u_d_el'].append(float(u_d[1]))
+            self.log_data['pid_saturated_az'].append(bool(sat[0]))
+            self.log_data['pid_saturated_el'].append(bool(sat[1]))
             
             self.last_log_time = self.time
     
@@ -1245,15 +1436,16 @@ class DigitalTwinRunner:
         # FIGURE 3: Control Torques (torque_az, torque_el)
         # ===================================================================
         fig3, (ax3a, ax3b) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
-        
-        tau_max = 1.0  # From motor config
+
+        tau_max = float(getattr(self.motor_az, 'tau_max', 1.0))
+        tau_min = float(getattr(self.motor_az, 'tau_min', -1.0))
         
         # Azimuth Torque
         ax3a.plot(t, np.array(self.log_data['torque_az']), 
                   color=color_az, linewidth=1.5, label='torque_az', alpha=0.9)
         ax3a.axhline(tau_max, color='red', linewidth=1.0, linestyle=':', 
-                     alpha=0.6, label='Saturation Limit')
-        ax3a.axhline(-tau_max, color='red', linewidth=1.0, linestyle=':', alpha=0.6)
+                 alpha=0.6, label='Saturation Limit')
+        ax3a.axhline(tau_min, color='red', linewidth=1.0, linestyle=':', alpha=0.6)
         ax3a.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
         ax3a.set_ylabel('Azimuth Torque [N·m]', fontsize=11, fontweight='bold')
         ax3a.set_title('Azimuth Motor Control Effort', fontsize=12, fontweight='bold')
@@ -1264,8 +1456,8 @@ class DigitalTwinRunner:
         ax3b.plot(t, np.array(self.log_data['torque_el']), 
                   color=color_el, linewidth=1.5, label='torque_el', alpha=0.9)
         ax3b.axhline(tau_max, color='red', linewidth=1.0, linestyle=':', 
-                     alpha=0.6, label='Saturation Limit')
-        ax3b.axhline(-tau_max, color='red', linewidth=1.0, linestyle=':', alpha=0.6)
+                 alpha=0.6, label='Saturation Limit')
+        ax3b.axhline(tau_min, color='red', linewidth=1.0, linestyle=':', alpha=0.6)
         ax3b.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
         ax3b.set_ylabel('Elevation Torque [N·m]', fontsize=11, fontweight='bold')
         ax3b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
@@ -1274,6 +1466,98 @@ class DigitalTwinRunner:
         ax3b.grid(True, alpha=0.3, linestyle=':')
         
         fig3.suptitle('Motor Control Torques', fontsize=14, fontweight='bold')
+        plt.tight_layout()
+
+        # ===================================================================
+        # FIGURE 3B: Coarse-loop PID Diagnostics (P/I/D breakdown)
+        # ===================================================================
+        have_pid_logs = (
+            'pid_u_p_az' in self.log_data and len(self.log_data['pid_u_p_az']) == len(t)
+        )
+        if have_pid_logs:
+            fig3b, (axp, axe) = plt.subplots(2, 1, figsize=(12, 8), sharex=True)
+
+            u_p_az = np.array(self.log_data['pid_u_p_az'])
+            u_i_az = np.array(self.log_data['pid_u_i_az'])
+            u_d_az = np.array(self.log_data['pid_u_d_az'])
+            tau_cmd_az = np.array(self.log_data['coarse_tau_cmd_az'])
+
+            u_p_el = np.array(self.log_data['pid_u_p_el'])
+            u_i_el = np.array(self.log_data['pid_u_i_el'])
+            u_d_el = np.array(self.log_data['pid_u_d_el'])
+            tau_cmd_el = np.array(self.log_data['coarse_tau_cmd_el'])
+
+            axp.plot(t, u_p_az, label='P', linewidth=1.2)
+            axp.plot(t, u_i_az, label='I', linewidth=1.2)
+            axp.plot(t, u_d_az, label='D', linewidth=1.2)
+            axp.plot(t, tau_cmd_az, label='tau_cmd', linewidth=2.0, alpha=0.7)
+            axp.set_ylabel('Az Torque [N·m]')
+            axp.set_title('Coarse PID Components (Az)')
+            axp.grid(True, alpha=0.3, linestyle=':')
+            axp.legend(loc='best', fontsize=9)
+
+            axe.plot(t, u_p_el, label='P', linewidth=1.2)
+            axe.plot(t, u_i_el, label='I', linewidth=1.2)
+            axe.plot(t, u_d_el, label='D', linewidth=1.2)
+            axe.plot(t, tau_cmd_el, label='tau_cmd', linewidth=2.0, alpha=0.7)
+            axe.set_ylabel('El Torque [N·m]')
+            axe.set_xlabel('Time [s]')
+            axe.set_title('Coarse PID Components (El)')
+            axe.grid(True, alpha=0.3, linestyle=':')
+            axe.legend(loc='best', fontsize=9)
+
+            fig3b.suptitle('Coarse-Loop PID Breakdown', fontsize=14, fontweight='bold')
+            plt.tight_layout()
+
+        # ===================================================================
+        # FIGURE 3C: Coarse-loop Saturation + Voltage Commands
+        # ===================================================================
+        have_sat_logs = (
+            'pid_saturated_az' in self.log_data and len(self.log_data['pid_saturated_az']) == len(t)
+        )
+        if have_sat_logs:
+            fig3c, (axs1, axs2) = plt.subplots(2, 1, figsize=(12, 7), sharex=True)
+            sat_az = np.array(self.log_data['pid_saturated_az'], dtype=float)
+            sat_el = np.array(self.log_data['pid_saturated_el'], dtype=float)
+            v_az = np.array(self.log_data['coarse_v_cmd_az'])
+            v_el = np.array(self.log_data['coarse_v_cmd_el'])
+
+            axs1.step(t, sat_az, where='post', label='Az saturated', linewidth=1.5)
+            axs1.step(t, sat_el, where='post', label='El saturated', linewidth=1.5)
+            axs1.set_ylabel('Saturated (0/1)')
+            axs1.set_title('Coarse Loop Saturation Flags')
+            axs1.set_ylim(-0.1, 1.1)
+            axs1.grid(True, alpha=0.3, linestyle=':')
+            axs1.legend(loc='best', fontsize=9)
+
+            axs2.plot(t, v_az, label='V_cmd Az', linewidth=1.2)
+            axs2.plot(t, v_el, label='V_cmd El', linewidth=1.2)
+            axs2.set_ylabel('Voltage [V]')
+            axs2.set_xlabel('Time [s]')
+            axs2.set_title('Motor Voltage Commands (ZOH at dt_coarse)')
+            axs2.grid(True, alpha=0.3, linestyle=':')
+            axs2.legend(loc='best', fontsize=9)
+
+            fig3c.suptitle('Coarse-Loop Command Diagnostics', fontsize=14, fontweight='bold')
+            plt.tight_layout()
+
+        # ===================================================================
+        # FIGURE 3D: Phase Plane (q vs qdot)
+        # ===================================================================
+        fig3d, (axph1, axph2) = plt.subplots(1, 2, figsize=(14, 6))
+        axph1.plot(np.rad2deg(np.array(self.log_data['q_az'])), np.rad2deg(np.array(self.log_data['qd_az'])), linewidth=1.0)
+        axph1.set_xlabel('Az Angle [deg]')
+        axph1.set_ylabel('Az Rate [deg/s]')
+        axph1.set_title('Az Phase Plane')
+        axph1.grid(True, alpha=0.3, linestyle=':')
+
+        axph2.plot(np.rad2deg(np.array(self.log_data['q_el'])), np.rad2deg(np.array(self.log_data['qd_el'])), linewidth=1.0)
+        axph2.set_xlabel('El Angle [deg]')
+        axph2.set_ylabel('El Rate [deg/s]')
+        axph2.set_title('El Phase Plane')
+        axph2.grid(True, alpha=0.3, linestyle=':')
+
+        fig3d.suptitle('Gimbal Phase Plane', fontsize=14, fontweight='bold')
         plt.tight_layout()
         
         # ===================================================================
@@ -1502,7 +1786,10 @@ class DigitalTwinRunner:
         print("=" * 70)
         print("PLOTS GENERATED SUCCESSFULLY")
         print("=" * 70)
-        print(f"Total Figures Created: 8")
+        extra_figs = 1  # Phase plane
+        extra_figs += 1 if have_pid_logs else 0
+        extra_figs += 1 if have_sat_logs else 0
+        print(f"Total Figures Created: {8 + extra_figs}")
         print(f"  - Figure 1: Gimbal Position (q_az, q_el)")
         print(f"  - Figure 2: Gimbal Velocity (qd_az, qd_el)")
         print(f"  - Figure 3: Control Torques (torque_az, torque_el)")
@@ -1511,6 +1798,11 @@ class DigitalTwinRunner:
         print(f"  - Figure 6: QPD Measurements (NES X, Y)")
         print(f"  - Figure 7: LOS Errors (X, Y, Total)")
         print(f"  - Figure 8: EKF State Estimates")
+        if have_pid_logs:
+            print(f"  - Figure 3B: PID Components (P/I/D)")
+        if have_sat_logs:
+            print(f"  - Figure 3C: Coarse Saturation + Voltage")
+        print(f"  - Figure 3D: Phase Plane (q vs qdot)")
         print(f"\nTotal Simulation Time: {t[-1]:.3f} s")
         print(f"Number of Samples: {len(t)}")
         print(f"RMS LOS Error: {rms_los:.2f} µrad")
@@ -1536,6 +1828,11 @@ class DigitalTwinRunner:
         # Reset all components
         self.motor_az.reset()
         self.motor_el.reset()
+
+        self.voltage_cmd_az = 0.0
+        self.voltage_cmd_el = 0.0
+        self.last_tau_cmd = np.zeros(2)
+        self.last_coarse_meta = {}
         self.fsm.reset()
         self.encoder_az.reset()
         self.encoder_el.reset()

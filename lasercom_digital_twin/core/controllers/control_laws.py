@@ -558,6 +558,8 @@ class FeedbackLinearizationController(BaseController):
         self.dyn = dynamics_model
         
         # PID Gains for the outer loop (linearized space)
+        # Default gains are designed for critically damped response with 5ms motor lag
+        # wn ~ 10 rad/s, zeta = 1 → kp = wn^2 = 100, kd = 2*zeta*wn = 20
         self.kp = np.array(config.get('kp', [100.0, 100.0]))
         self.kd = np.array(config.get('kd', [20.0, 20.0]))
         self.ki = np.array(config.get('ki', [10.0, 10.0]))
@@ -567,6 +569,19 @@ class FeedbackLinearizationController(BaseController):
         # If the plant applies tau_net = tau_motor - D*dq, we must add D*dq to command
         self.friction_az = config.get('friction_az', 0.0)  # N·m·s/rad
         self.friction_el = config.get('friction_el', 0.0)  # N·m·s/rad
+        
+        # Conditional friction compensation (CRITICAL for stability)
+        # When True, only compensate friction if velocity is in same direction as desired acceleration
+        # This prevents friction feedforward from fighting the controller during transients
+        self.conditional_friction = config.get('conditional_friction', True)
+        
+        # Robust/Sliding Mode Term (handles model uncertainty)
+        # Adds a switching term: -eta * sign(s) where s = error_dot + lambda * error
+        # This provides robustness to unmodeled dynamics and parameter variations
+        self.enable_robust_term = config.get('enable_robust_term', False)
+        self.robust_eta = np.array(config.get('robust_eta', [0.01, 0.01]))  # N·m switching gain
+        self.robust_lambda = config.get('robust_lambda', 5.0)  # Sliding surface slope
+        self.robust_epsilon = config.get('robust_epsilon', 0.01)  # Boundary layer for smooth switching
         
         # Disturbance compensation (from EKF estimates)
         # WARNING: EKF disturbance estimates may be noisy/biased during transients
@@ -686,27 +701,49 @@ class FeedbackLinearizationController(BaseController):
 
         # 4. Nonlinear Inverse Dynamics with Disturbance Compensation
         # Transform virtual control to actual torque by inverting the dynamics
-        # tau = M*v + C*dq + G + D*dq - d_hat
+        # tau = M*v + C*dq + G + D*dq - d_hat + u_robust
         # 
         # Explanation:
         # - M*v: Inertial torque needed for desired acceleration
-        # - C*dq: Compensation for Coriolis/centrifugal effects (added directly, NOT multiplied by M)
-        # - G: Compensation for gravity torque (added directly, NOT multiplied by M)
-        # - D*dq: Compensation for viscous friction (CRITICAL - plant applies tau_net = tau - D*dq)
+        # - C*dq: Compensation for Coriolis/centrifugal effects
+        # - G: Compensation for gravity torque
+        # - D*dq: Compensation for viscous friction (CONDITIONAL - see below)
         # - d_hat: Feedforward compensation for estimated disturbances
-        # 
-        # CRITICAL: The control law is tau = M(q)*v + C(q,dq)*dq + G(q) + D*dq - d_hat
-        # NOT tau = M(q)*(v + C*dq + G - d_hat)
-        # The C, G, D, and d_hat terms are FORCES/TORQUES that must be added to M*v,
-        # not pseudo-accelerations to be multiplied by M!
+        # - u_robust: Sliding mode term for robustness
         
-        # Friction compensation (must match plant friction model!)
-        # The plant applies: tau_net = tau_motor - friction * dq
-        # So we must add friction * dq to compensate
-        friction_comp = np.array([self.friction_az * dq[0], self.friction_el * dq[1]])
+        # Friction compensation with CONDITIONAL logic
+        # Only compensate friction when velocity is in the same direction as desired control
+        # This prevents friction feedforward from fighting the controller during transients
+        # (e.g., when overshooting and trying to decelerate, friction helps slow down!)
+        friction_coeff = np.array([self.friction_az, self.friction_el])
         
-        # Commanded torque (CORRECT FORMULATION with friction compensation)
-        tau = M @ v + C @ dq + G + friction_comp - d_hat
+        if self.conditional_friction:
+            # Compute desired acceleration direction from outer loop
+            desired_accel_sign = np.sign(v)
+            velocity_sign = np.sign(dq)
+            
+            # Only compensate friction if velocity and desired acceleration are aligned
+            # If they oppose (overshoot scenario), let plant friction help slow down
+            aligned = (desired_accel_sign * velocity_sign) >= 0
+            friction_comp = np.where(aligned, friction_coeff * dq, np.zeros(2))
+        else:
+            # Standard friction compensation (always active)
+            friction_comp = friction_coeff * dq
+        
+        # Robust/Sliding Mode Term for handling model uncertainties
+        # Uses a smoothed sign function (tanh) to avoid chattering
+        if self.enable_robust_term:
+            # Sliding surface: s = error_dot + lambda * error
+            s = error_dot + self.robust_lambda * error
+            
+            # Smoothed switching: tanh(s/epsilon) instead of sign(s)
+            # This creates a boundary layer for continuous control
+            u_robust = -self.robust_eta * np.tanh(s / self.robust_epsilon)
+        else:
+            u_robust = np.zeros(2)
+        
+        # Commanded torque (IMPROVED FORMULATION)
+        tau = M @ v + C @ dq + G + friction_comp - d_hat + u_robust
 
         # 5. Apply Actuator Saturation
         u_saturated = np.clip(tau, self.tau_min, self.tau_max)
@@ -724,9 +761,11 @@ class FeedbackLinearizationController(BaseController):
             'C_term': C @ dq,
             'G_term': G,
             'friction_comp': friction_comp,
+            'u_robust': u_robust if self.enable_robust_term else np.zeros(2),
             'dist_compensated': d_hat,
             'tau_unsaturated': tau,
-            'saturation_active': np.any(u_saturated != tau)
+            'saturation_active': np.any(u_saturated != tau),
+            'conditional_friction_active': self.conditional_friction
         }
 
         return u_saturated, metadata

@@ -283,6 +283,185 @@ class GimbalDynamics:
         
         return d_state
 
+    def linearize(self, q_op: np.ndarray, dq_op: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Linearize the gimbal dynamics around an operating point to obtain state-space matrices.
+        
+        Mathematical Formulation:
+        -------------------------
+        The nonlinear dynamics are:
+        
+        $$M(q) \\ddot{q} + C(q, \\dot{q}) \\dot{q} + G(q) = \\tau$$
+        
+        Define state vector: $x = [q_1, q_2, \\dot{q}_1, \\dot{q}_2]^T \\in \\mathbb{R}^4$
+        Define input vector: $u = [\\tau_1, \\tau_2]^T \\in \\mathbb{R}^2$
+        
+        The state-space form is:
+        
+        $$\\dot{x} = f(x, u)$$
+        
+        where:
+        
+        $$f(x, u) = \\begin{bmatrix} \\dot{q} \\\\ M(q)^{-1}[\\tau - C(q,\\dot{q})\\dot{q} - G(q)] \\end{bmatrix}$$
+        
+        Linearization around $(x_0, u_0)$:
+        
+        $$\\Delta \\dot{x} = A \\Delta x + B \\Delta u$$
+        
+        where:
+        
+        $$A = \\frac{\\partial f}{\\partial x}\\bigg|_{x_0, u_0}, \\quad B = \\frac{\\partial f}{\\partial u}\\bigg|_{x_0, u_0}$$
+        
+        The output equation (measuring joint positions):
+        
+        $$y = C x + D u$$
+        
+        where $C = [I_{2x2}, 0_{2x2}]$ maps states to measured positions.
+        
+        Jacobian Structure:
+        ------------------
+        
+        $$A = \\begin{bmatrix}
+        0_{2x2} & I_{2x2} \\\\
+        \\frac{\\partial \\ddot{q}}{\\partial q} & \\frac{\\partial \\ddot{q}}{\\partial \\dot{q}}
+        \\end{bmatrix}_{4x4}$$
+        
+        $$B = \\begin{bmatrix}
+        0_{2x2} \\\\
+        M(q_0)^{-1}
+        \\end{bmatrix}_{4x2}$$
+        
+        Cross-Coupling Analysis:
+        -----------------------
+        The off-diagonal terms in A reveal dynamic coupling between Pan and Tilt axes.
+        At high tilt angles (|q_2| > 45°), significant coupling may require:
+        - Cross-coupling feedforward compensation
+        - Decoupling control strategies
+        - MIMO control design (H-infinity, LQR)
+        
+        Args:
+            q_op (np.ndarray): Operating point for joint positions [rad] (2,)
+            dq_op (np.ndarray): Operating point for joint velocities [rad/s] (2,)
+        
+        Returns:
+            Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+                - A (4x4): State matrix
+                - B (4x2): Input matrix
+                - C (2x4): Output matrix (measures positions)
+                - D (2x2): Feedthrough matrix (zero for mechanical systems)
+        
+        Example:
+            >>> gimbal = GimbalDynamics()
+            >>> q0 = np.array([0.0, 0.0])  # Upright position
+            >>> dq0 = np.array([0.0, 0.0])  # At rest
+            >>> A, B, C, D = gimbal.linearize(q0, dq0)
+            >>> print(f"A matrix shape: {A.shape}")
+            A matrix shape: (4, 4)
+        """
+        # Validate inputs
+        assert q_op.shape == (2,), f"q_op must be (2,), got {q_op.shape}"
+        assert dq_op.shape == (2,), f"dq_op must be (2,), got {dq_op.shape}"
+        
+        # Operating point state and input
+        x_op = np.concatenate([q_op, dq_op])
+
+        # IMPORTANT: linearize about a dynamically consistent operating point.
+        # For mechanical systems this means choosing u0 such that q̈=0 at (q0, q̇0):
+        #   tau_op = C(q0,q̇0) q̇0 + G(q0)
+        # (so that M(q0) q̈ = 0).
+        tau_op = (self.get_coriolis_matrix(q_op, dq_op) @ dq_op) + self.get_gravity_vector(q_op)
+
+        # Numerical differentiation parameters
+        # 1e-7 is often too small for double-precision finite differences once nonlinear
+        # trig + matrix solves are involved.
+        epsilon = 1e-6
+        
+        # Initialize Jacobian matrices
+        n_states = 4
+        n_inputs = 2
+        A = np.zeros((n_states, n_states))
+        B = np.zeros((n_states, n_inputs))
+        
+        # ====================================================================
+        # COMPUTE A MATRIX: ∂f/∂x
+        # ====================================================================
+        # Use central difference: df/dx ≈ [f(x+ε) - f(x-ε)] / (2ε)
+        
+        for i in range(n_states):
+            # Perturb state forward
+            x_plus = x_op.copy()
+            x_plus[i] += epsilon
+            f_plus = self.state_space_derivative(0.0, x_plus, tau_op)
+            
+            # Perturb state backward
+            x_minus = x_op.copy()
+            x_minus[i] -= epsilon
+            f_minus = self.state_space_derivative(0.0, x_minus, tau_op)
+            
+            # Central difference
+            A[:, i] = (f_plus - f_minus) / (2.0 * epsilon)
+        
+        # ====================================================================
+        # COMPUTE B MATRIX: ∂f/∂u
+        # ====================================================================
+        # B is simpler: upper half is zero, lower half is M(q)^{-1}
+        
+        for j in range(n_inputs):
+            # Perturb input forward
+            tau_plus = tau_op.copy()
+            tau_plus[j] += epsilon
+            f_plus = self.state_space_derivative(0.0, x_op, tau_plus)
+            
+            # Perturb input backward
+            tau_minus = tau_op.copy()
+            tau_minus[j] -= epsilon
+            f_minus = self.state_space_derivative(0.0, x_op, tau_minus)
+            
+            # Central difference
+            B[:, j] = (f_plus - f_minus) / (2.0 * epsilon)
+        
+        # ====================================================================
+        # COMPUTE C MATRIX: Output equation y = [q1, q2]
+        # ====================================================================
+        # For position measurement: y = [q1, q2] = [I 0] * [q; dq]
+        C = np.array([
+            [1.0, 0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0, 0.0]
+        ])
+        
+        # ====================================================================
+        # COMPUTE D MATRIX: Feedthrough (zero for mechanical systems)
+        # ====================================================================
+        D = np.zeros((2, 2))
+        
+        # ====================================================================
+        # ANALYTICAL VERIFICATION (Optional Sanity Check)
+        # ====================================================================
+        # For debugging: compute M^{-1} analytically and compare with B[2:4, :]
+        M_op = self.get_mass_matrix(q_op)
+        M_inv = np.linalg.inv(M_op)
+        
+        # B should have structure: [0; M^{-1}]
+        analytical_B_lower = M_inv
+        numerical_B_lower = B[2:4, :]
+        
+        if not np.allclose(analytical_B_lower, numerical_B_lower, atol=1e-5):
+            print("WARNING: Numerical B matrix lower block differs from analytical M^{-1}")
+            print(f"Analytical M^{{-1}}:\n{analytical_B_lower}")
+            print(f"Numerical B[2:4,:]:\n{numerical_B_lower}")
+        
+        # ====================================================================
+        # COUPLING ANALYSIS
+        # ====================================================================
+        # Check off-diagonal terms in A to assess coupling strength
+        coupling_metric = np.abs(A[2, 3]) + np.abs(A[3, 2])  # Cross-velocity coupling
+        
+        if coupling_metric > 0.1:  # Arbitrary threshold
+            print(f"INFO: Significant cross-axis coupling detected (metric: {coupling_metric:.3f})")
+            print("Consider decoupling compensation or MIMO control design.")
+        
+        return A, B, C, D
+
 if __name__ == "__main__":
     # Sanity Check
     print("Running GimbalDynamics Sanity Check...")
