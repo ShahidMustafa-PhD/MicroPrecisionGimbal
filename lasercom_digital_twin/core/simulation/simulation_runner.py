@@ -997,8 +997,11 @@ class DigitalTwinRunner:
             # Or simply zero command if the plant has restoring force (flexures usually do)
             u_cmd = np.array([0.0, 0.0])
             
-            # Reset integrator in PID to prevent windup while waiting for beam?
-            # self.fsm_pid.reset() # Optional: Good practice for acquisition logic
+            # CRITICAL: Hold integrator to prevent windup while waiting for beam
+            # This prevents the FSM from accumulating large integral values
+            # that would cause divergence when the beam returns on-sensor.
+            if hasattr(self, 'fsm_pid') and self.fsm_pid is not None:
+                self.fsm_pid.hold_integrator()
         
         # ====================================================================
         # STEP 3: COMMAND SATURATION (VCA Voltage Limits)
@@ -1565,47 +1568,47 @@ class DigitalTwinRunner:
         # ===================================================================
         fig4, ((ax4a, ax4b), (ax4c, ax4d)) = plt.subplots(2, 2, figsize=(14, 10), sharex=True)
         
-        fsm_max = 2  # 10 mrad = 10000 µrad
+        fsm_max = 0  # 10 mrad = 10000 µrad
         
         # FSM Tip Position
-        ax4a.plot(t, np.array(self.log_data['fsm_tip']) , 
+        ax4a.plot(t, np.rad2deg(np.array(self.log_data['fsm_tip'])) , 
                   color=color_az, linewidth=1.5, label='fsm_tip', alpha=0.9)
         ax4a.axhline(fsm_max, color='orange', linewidth=1.0, linestyle=':', 
                      alpha=0.6, label='FSM Limit')
         ax4a.axhline(-fsm_max, color='orange', linewidth=1.0, linestyle=':', alpha=0.6)
         ax4a.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
-        ax4a.set_ylabel('Tip Angle [µrad]', fontsize=10, fontweight='bold')
+        ax4a.set_ylabel('Tip Angle [deg]', fontsize=10, fontweight='bold')
         ax4a.set_title('FSM Tip Position', fontsize=11, fontweight='bold')
         ax4a.legend(loc='best', fontsize=8)
         ax4a.grid(True, alpha=0.3, linestyle=':')
         
         # FSM Tilt Position
-        ax4b.plot(t, np.array(self.log_data['fsm_tilt']) , 
+        ax4b.plot(t, np.rad2deg(np.array(self.log_data['fsm_tilt']) ), 
                   color=color_el, linewidth=1.5, label='fsm_tilt', alpha=0.9)
         ax4b.axhline(fsm_max, color='orange', linewidth=1.0, linestyle=':', 
                      alpha=0.6, label='FSM Limit')
         ax4b.axhline(-fsm_max, color='orange', linewidth=1.0, linestyle=':', alpha=0.6)
         ax4b.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
-        ax4b.set_ylabel('Tilt Angle [µrad]', fontsize=10, fontweight='bold')
+        ax4b.set_ylabel('Tilt Angle [deg]', fontsize=10, fontweight='bold')
         ax4b.set_title('FSM Tilt Position', fontsize=11, fontweight='bold')
         ax4b.legend(loc='best', fontsize=8)
         ax4b.grid(True, alpha=0.3, linestyle=':')
         
         # FSM Tip Command
-        ax4c.plot(t, np.array(self.log_data['fsm_cmd_tip']) , 
+        ax4c.plot(t, np.rad2deg(np.array(self.log_data['fsm_cmd_tip'])) , 
                   color=color_cmd, linewidth=1.5, label='fsm_cmd_tip', alpha=0.9)
         ax4c.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
-        ax4c.set_ylabel('Tip Command [µrad]', fontsize=10, fontweight='bold')
+        ax4c.set_ylabel('Tip Command [deg]', fontsize=10, fontweight='bold')
         ax4c.set_xlabel('Time [s]', fontsize=10, fontweight='bold')
         ax4c.set_title('FSM Tip Command', fontsize=11, fontweight='bold')
         ax4c.legend(loc='best', fontsize=8)
         ax4c.grid(True, alpha=0.3, linestyle=':')
         
         # FSM Tilt Command
-        ax4d.plot(t, np.array(self.log_data['fsm_cmd_tilt']) , 
+        ax4d.plot(t, np.rad2deg(np.array(self.log_data['fsm_cmd_tilt'])) , 
                   color=color_cmd, linewidth=1.5, label='fsm_cmd_tilt', alpha=0.9)
         ax4d.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
-        ax4d.set_ylabel('Tilt Command [µrad]', fontsize=10, fontweight='bold')
+        ax4d.set_ylabel('Tilt Command [deg]', fontsize=10, fontweight='bold')
         ax4d.set_xlabel('Time [s]', fontsize=10, fontweight='bold')
         ax4d.set_title('FSM Tilt Command', fontsize=11, fontweight='bold')
         ax4d.legend(loc='best', fontsize=8)

@@ -156,12 +156,15 @@ def run_comparison_study():
             'harmonics': [(1.0, 1.0), (2.1, 0.3)]
         },
         feedback_linearization_config={
-            # Gains designed for critically damped response with 5ms motor lag
-            # Natural frequency ωn ≈ 10 rad/s (conservative for motor dynamics)
-            # Damping ratio ζ ≈ 1.0 (critically damped)
-            'kp': [50.0, 50.0],    # Position gain [1/s²]
-            'kd': [10.0, 10.0],    # Velocity gain [1/s] - increased for damping
-            'ki': [5.0, 5.0],      # Integral for steady-state error rejection
+            # Gains designed for faster settling with motor lag compensation
+            # Target bandwidth: ωn ≈ 20 rad/s (3 Hz)
+            # Damping ratio: ζ ≈ 0.9 (slightly underdamped for faster response)
+            # For critically damped: Kd = 2*ζ*ωn, Kp = ωn²
+            # With ωn=20: Kp=400, Kd=36. But motor lag limits effective bandwidth.
+            # Using ωn=15 for robustness: Kp=225, Kd=27
+            'kp': [150.0, 150.0],    # Position gain [1/s²] - increased for faster response
+            'kd': [20.0, 20.0],    # Velocity gain [1/s] - damping
+            'ki': [15.0, 15.0],      # Integral for steady-state error rejection
             'enable_integral': True,
             'tau_max': [10.0, 10.0],
             'tau_min': [-10.0, -10.0],

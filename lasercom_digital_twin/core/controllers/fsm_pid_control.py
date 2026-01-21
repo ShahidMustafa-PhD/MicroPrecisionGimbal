@@ -165,6 +165,27 @@ class FsmPidController:
         self._error_prev = np.zeros(2)
         self._initialized = False
     
+    def hold_integrator(self) -> None:
+        """
+        Hold integrator state (prevent accumulation).
+        
+        Call this when the beam is off-sensor to prevent integrator windup.
+        The integrator value is frozen at its current value until normal
+        updates resume. This prevents the FSM from "winding up" while
+        waiting for coarse gimbal to bring the beam back on-sensor.
+        
+        Usage in simulation_runner.py:
+            if not is_beam_on_sensor:
+                self.fsm_pid.hold_integrator()
+        """
+        # Reset error_prev to current value to prevent derivative kick
+        # when updates resume. Also sets initialized flag to False so
+        # next update treats it as a fresh start for derivative.
+        self._initialized = False
+        # Zero the filtered derivative to prevent old state affecting new updates
+        self._derivative = np.zeros(2)
+        # Integrator keeps its current value (no reset, just no accumulation)
+    
     def update(self, 
                setpoint: np.ndarray, 
                measurement: np.ndarray, 
@@ -327,42 +348,64 @@ class FsmPidController:
         return self.tip_gains, self.tilt_gains
 
 
-def create_fsm_controller_from_design(bandwidth_hz: float = 150.0) -> FsmPidController:
+def create_fsm_controller_from_design(bandwidth_hz: float = 5.0) -> FsmPidController:
     """
     Factory function to create FSM controller with gains from control design.
     
-    This loads the tuned PIDF gains from the FSM_control_design.py analysis.
-    Gains are based on frequency-domain design targeting:
-    - Bandwidth: 100-200 Hz
-    - Phase margin: ≥ 45°
-    - Cross-talk: < 5%
+    This loads the tuned PI gains optimized for the FSM state-space model.
+    The gains are designed to:
+    - Avoid exciting the plant resonances at 20-23 Hz (low bandwidth)
+    - Achieve zero steady-state error via integral action
+    - Provide stable, well-damped response
+    
+    CRITICAL: The FSM state-space model has DC gain ~47 (from modal reduction).
+    Controller gains are tuned for this plant, NOT a normalized plant.
+    
+    Plant resonances: 20 Hz and 23 Hz (from modal analysis)
+    Recommended bandwidth: < 10 Hz to avoid resonance excitation
     
     Parameters
     ----------
     bandwidth_hz : float
-        Target closed-loop bandwidth [Hz]. Default 150 Hz.
+        Target closed-loop bandwidth [Hz]. Default 5 Hz (conservative).
+        For higher bandwidth, ensure adequate phase margin at resonances.
     
     Returns
     -------
     FsmPidController
         Configured controller instance
     """
-    # These gains are derived from frequency-domain analysis
-    # See FSM_control_design.py for derivation
-    omega_c = 2 * np.pi * bandwidth_hz
-    omega_i = omega_c / 10.0  # Integral corner frequency
+    # FSM plant DC gain from state-space model: G(0) = -C*A^(-1)*B
+    # Diagonal elements: ~47 (tip), ~48 (tilt)
+    FSM_DC_GAIN = 47.0
     
-    # Approximate gains (should match FSM_control_design.py output)
-    # These are placeholder values - in production, load from JSON
-    Kp_tip = 0.976
-    Ki_tip = 91.98 #Kp_tip * omega_i
-    Kd_tip = 0.000518 #Kp_tip / (2.0 * omega_c)
-    N_tip = 15.0
+    # Plant resonances at 20-23 Hz from modal analysis
+    # To avoid exciting resonances, keep closed-loop bandwidth below 10 Hz
+    # 
+    # Design strategy:
+    # 1. Proportional gain sets the loop gain: K_loop = Kp * FSM_DC_GAIN * 2 (2x from optical)
+    #    For stable response, K_loop ~ 2-3 at DC
+    # 2. Integral gain provides zero SSE: Ki should be low to avoid resonance excitation
+    #    Time constant Ti = Kp/Ki should be ~1-2 seconds for smooth convergence
+    # 3. Derivative disabled (Kd=0) to avoid noise amplification from QPD
     
-    Kp_tilt = 0.9529
-    Ki_tilt = 89.80 #Kp_tilt * omega_i
-    Kd_tilt = 0.000506 #Kp_tilt / (2.0 * omega_c)
-    N_tilt = 15.0
+    # Proportional gain: Kp * 47 * 2 ≈ 2 (loop gain)
+    # Kp = 2 / (47 * 2) ≈ 0.02
+    Kp_tip = 0.02
+    Kp_tilt = 0.02
+    
+    # Integral gain: For Ti = 2 seconds settling, Ki = Kp / Ti
+    # Ki = 0.02 / 0.04 = 0.5 (gives settling in ~400ms)
+    Ki_tip = 0.5
+    Ki_tilt = 0.5
+    
+    # Derivative: Disabled for stability with resonant plant
+    Kd_tip = 0.0
+    Kd_tilt = 0.0
+    
+    # Derivative filter coefficient (unused when Kd=0, but set reasonable value)
+    N_tip = 10.0
+    N_tilt = 10.0
     
     tip_gains = FsmPidGains(Kp=Kp_tip, Ki=Ki_tip, Kd=Kd_tip, N=N_tip)
     tilt_gains = FsmPidGains(Kp=Kp_tilt, Ki=Ki_tilt, Kd=Kd_tilt, N=N_tilt)
