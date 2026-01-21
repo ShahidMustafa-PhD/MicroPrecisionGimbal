@@ -236,7 +236,7 @@ class DigitalTwinRunner:
         # CM offsets set to 0 by default for simpler controller tuning; add via config for realism
         dynamics_cfg = self.config.dynamics_config or {}
         self.pan_mass = dynamics_cfg.get('pan_mass', 0.5)
-        self.tilt_mass = dynamics_cfg.get('tilt_mass', 0.25)
+        self.tilt_mass = dynamics_cfg.get('tilt_mass', 0.25) # nudge the parameters to show imperfections
         self.cm_r = dynamics_cfg.get('cm_r', 0.0)    # Zero CM offset by default
         self.cm_h = dynamics_cfg.get('cm_h', 0.0)    # Zero CM offset by default
         self.gravity = dynamics_cfg.get('gravity', 9.81)
@@ -251,6 +251,16 @@ class DigitalTwinRunner:
         
         # Initialize GimbalDynamics
         self.dynamics = GimbalDynamics(
+            pan_mass=self.pan_mass,
+            tilt_mass=self.tilt_mass,
+            cm_r=self.cm_r,
+            cm_h=self.cm_h,
+            gravity=self.gravity
+        )
+
+        # Create    seperate dynamics instance for computing simulations. The real model.
+        # This is NOT used for the NDOB and feedback linearization.
+        self.dynamics_sim = GimbalDynamics(
             pan_mass=self.pan_mass,
             tilt_mass=self.tilt_mass,
             cm_r=self.cm_r,
@@ -655,7 +665,8 @@ class DigitalTwinRunner:
 
             # 3. Compute Accelerations via Inverted Mass Matrix
             # q̈ = M⁻¹(τ_net - C·q̇ - G)
-            q_dd = self.dynamics.compute_forward_dynamics(q, dq, tau_net)
+            # We use the dynamics_sim instance to simulate the realistic plant To test the capabilites of FBL+NDOB
+            q_dd = self.dynamics_sim.compute_forward_dynamics(q, dq, tau_net)
 
             # 4. Numerical Integration (Semi-Implicit / Symplectic Euler)
             # Preferred for Hamiltonian systems/mechanical stability
@@ -2019,8 +2030,8 @@ def main_feedback_linearization():
         dynamics_config={
             'pan_mass': 0.5,
             'tilt_mass': 0.25,
-            'cm_r': 0.02,
-            'cm_h': 0.005,
+            'cm_r': 0.0002,
+            'cm_h': 0.0005,
             'gravity': 9.81
         }
     )
