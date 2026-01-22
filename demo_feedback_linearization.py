@@ -523,50 +523,70 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     # plt.tight_layout() - Handled by constrained_layout
     
     # =============================================================================
-    # FIGURE 8: State Estimator (EKF) Performance
-    # Plots Estimated Position and Velocity for all cases
+    # FIGURE 8: State Estimator (EKF) Performance vs Ground Truth
+    # Plots Estimated Position and Velocity vs Actual for all cases
     # =============================================================================
     fig8, ((ax8a, ax8b), (ax8c, ax8d)) = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
     
-    # Estimated Azimuth
-    ax8a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_az']), color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax8a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_az']), color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax8a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_az']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
-    ax8a.set_ylabel('Est. Azimuth [deg]', fontsize=11, fontweight='bold')
-    ax8a.set_title('EKF Azimuth Estimate', fontsize=12, fontweight='bold')
-    ax8a.legend(loc='best', fontsize=9)
+    # Estimated vs Actual Azimuth
+    ax8a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_az']), color=COLOR_PID, linewidth=1, label='PID Est', alpha=0.9)
+    ax8a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_az']), color=COLOR_FBL, linewidth=1, label='FBL Est', alpha=0.9)
+    ax8a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_az']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB Est', alpha=0.9)
+    # Ground Truth signals
+    ax8a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['q_az']), color=COLOR_PID, linewidth=1, linestyle='--', alpha=0.4, label='PID Truth')
+    ax8a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['q_az']), color=COLOR_FBL, linewidth=1, linestyle='--', alpha=0.4, label='FBL Truth')
+    ax8a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['q_az']), color=COLOR_NDOB, linewidth=1, linestyle='--', alpha=0.4, label='NDOB Truth')
+    
+    ax8a.set_ylabel('Azimuth [deg]', fontsize=11, fontweight='bold')
+    ax8a.set_title('Azimuth Position Estimate vs Truth', fontsize=12, fontweight='bold')
+    ax8a.legend(loc='best', fontsize=8, ncol=2)
     ax8a.grid(True, alpha=0.3, linestyle=':')
     
-    # Estimated Elevation
-    ax8b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_el']), color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax8b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_el']), color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax8b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_el']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
-    ax8b.set_ylabel('Est. Elevation [deg]', fontsize=11, fontweight='bold')
-    ax8b.set_title('EKF Elevation Estimate', fontsize=12, fontweight='bold')
-    ax8b.legend(loc='best', fontsize=9)
+    # Estimated vs Actual Elevation
+    ax8b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_el']), color=COLOR_PID, linewidth=1, label='PID Est', alpha=0.9)
+    ax8b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_el']), color=COLOR_FBL, linewidth=1, label='FBL Est', alpha=0.9)
+    ax8b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_el']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB Est', alpha=0.9)
+    # Ground Truth signals
+    ax8b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['q_el']), color=COLOR_PID, linewidth=1, linestyle='--', alpha=0.4)
+    ax8b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['q_el']), color=COLOR_FBL, linewidth=1, linestyle='--', alpha=0.4)
+    ax8b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['q_el']), color=COLOR_NDOB, linewidth=1, linestyle='--', alpha=0.4)
+    
+    ax8b.set_ylabel('Elevation [deg]', fontsize=11, fontweight='bold')
+    ax8b.set_title('Elevation Position Estimate vs Truth', fontsize=12, fontweight='bold')
+    ax8b.legend(loc='best', fontsize=8)
     ax8b.grid(True, alpha=0.3, linestyle=':')
     
-    # Estimated Azimuth Rate
-    ax8c.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_az_dot']), color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax8c.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_az_dot']), color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax8c.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_az_dot']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
-    ax8c.set_ylabel('Est. Az Rate [deg/s]', fontsize=11, fontweight='bold')
+    # Estimated vs Actual Azimuth Rate
+    ax8c.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_az_dot']), color=COLOR_PID, linewidth=1, label='PID Est', alpha=0.9)
+    ax8c.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_az_dot']), color=COLOR_FBL, linewidth=1, label='FBL Est', alpha=0.9)
+    ax8c.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_az_dot']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB Est', alpha=0.9)
+    # Ground Truth signals
+    ax8c.plot(t_pid, np.rad2deg(results_pid['log_arrays']['qd_az']), color=COLOR_PID, linewidth=1, linestyle='--', alpha=0.4)
+    ax8c.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['qd_az']), color=COLOR_FBL, linewidth=1, linestyle='--', alpha=0.4)
+    ax8c.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['qd_az']), color=COLOR_NDOB, linewidth=1, linestyle='--', alpha=0.4)
+    
+    ax8c.set_ylabel('Az Rate [deg/s]', fontsize=11, fontweight='bold')
     ax8c.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
-    ax8c.set_title('EKF Azimuth Rate Estimate', fontsize=12, fontweight='bold')
-    ax8c.legend(loc='best', fontsize=9)
+    ax8c.set_title('Azimuth Rate Estimate vs Truth', fontsize=12, fontweight='bold')
+    ax8c.legend(loc='best', fontsize=8)
     ax8c.grid(True, alpha=0.3, linestyle=':')
     
-    # Estimated Elevation Rate
-    ax8d.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_el_dot']), color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax8d.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_el_dot']), color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax8d.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_el_dot']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
-    ax8d.set_ylabel('Est. El Rate [deg/s]', fontsize=11, fontweight='bold')
+    # Estimated vs Actual Elevation Rate
+    ax8d.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_el_dot']), color=COLOR_PID, linewidth=1, label='PID Est', alpha=0.9)
+    ax8d.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_el_dot']), color=COLOR_FBL, linewidth=1, label='FBL Est', alpha=0.9)
+    ax8d.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_el_dot']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB Est', alpha=0.9)
+    # Ground Truth signals
+    ax8d.plot(t_pid, np.rad2deg(results_pid['log_arrays']['qd_el']), color=COLOR_PID, linewidth=1, linestyle='--', alpha=0.4)
+    ax8d.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['qd_el']), color=COLOR_FBL, linewidth=1, linestyle='--', alpha=0.4)
+    ax8d.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['qd_el']), color=COLOR_NDOB, linewidth=1, linestyle='--', alpha=0.4)
+    
+    ax8d.set_ylabel('El Rate [deg/s]', fontsize=11, fontweight='bold')
     ax8d.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
-    ax8d.set_title('EKF Elevation Rate Estimate', fontsize=12, fontweight='bold')
-    ax8d.legend(loc='best', fontsize=9)
+    ax8d.set_title('Elevation Rate Estimate vs Truth', fontsize=12, fontweight='bold')
+    ax8d.legend(loc='best', fontsize=8)
     ax8d.grid(True, alpha=0.3, linestyle=':')
     
-    fig8.suptitle('EKF State Estimates (Az/El Position & Rate)', fontsize=14, fontweight='bold')
+    fig8.suptitle('EKF Performance (Estimate vs Ground Truth)', fontsize=14, fontweight='bold')
 
     # =============================================================================
     # Save all figures to disk (300 DPI, publication quality)
