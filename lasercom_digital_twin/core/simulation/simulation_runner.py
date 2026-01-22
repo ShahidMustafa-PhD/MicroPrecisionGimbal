@@ -550,7 +550,7 @@ class DigitalTwinRunner:
             # New PIDF controller with derivative filtering and anti-windup
             # Load tuned gains from FSM_control_design.py or use defaults
             bandwidth_hz = self.config.fsm_controller_config.get('bandwidth_hz', 150.0) if self.config.fsm_controller_config else 150.0
-            self.fsm_pid = create_fsm_controller_from_design(bandwidth_hz=bandwidth_hz)
+            self.fsm_pid = create_fsm_controller_from_design(bandwidth_hz=bandwidth_hz) # Factory function to create object of NonlinearDisturbanceObserver:
             print(f"INFO: FSM PIDF controller initialized (Bandwidth: {bandwidth_hz:.0f} Hz)")
         else:
             # Legacy FSM controller for backward compatibility

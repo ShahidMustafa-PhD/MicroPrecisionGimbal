@@ -36,7 +36,7 @@ Research-grade matplotlib figures with:
 - Threshold annotations
 - Professional color scheme
 
-Author: Senior Control Systems Engineer
+Author: Dr. S. Shahid Mustafa
 Date: January 22, 2026
 """
 
@@ -190,8 +190,15 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
               color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
     ax1a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['q_az']), 
               color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
-    ax1a.plot(t_pid, np.full_like(t_pid, target_az_deg), 
-              color=color_cmd, linewidth=2, linestyle='--', label='Command', alpha=0.7)
+    
+    # Plotlogged target if available, else use constant fallback
+    if 'target_az' in results_pid['log_arrays']:
+        ax1a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['target_az']), 
+                  color=color_cmd, linewidth=2, linestyle='--', label='Command', alpha=0.7)
+    else:
+        ax1a.plot(t_pid, np.full_like(t_pid, target_az_deg), 
+                  color=color_cmd, linewidth=2, linestyle='--', label='Command', alpha=0.7)
+    
     ax1a.set_ylabel('Azimuth Angle [deg]', fontsize=11, fontweight='bold')
     ax1a.set_title('Gimbal Azimuth Position', fontsize=12, fontweight='bold')
     ax1a.legend(loc='best', fontsize=9)
@@ -204,8 +211,13 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
               color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
     ax1b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['q_el']), 
               color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
-    ax1b.plot(t_pid, np.full_like(t_pid, target_el_deg), 
-              color=color_cmd, linewidth=2, linestyle='--', label='Command', alpha=0.7)
+    
+    if 'target_el' in results_pid['log_arrays']:
+        ax1b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['target_el']), 
+                  color=color_cmd, linewidth=2, linestyle='--', label='Command', alpha=0.7)
+    else:
+        ax1b.plot(t_pid, np.full_like(t_pid, target_el_deg), 
+                  color=color_cmd, linewidth=2, linestyle='--', label='Command', alpha=0.7)
     ax1b.set_ylabel('Elevation Angle [deg]', fontsize=11, fontweight='bold')
     ax1b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
     ax1b.set_title('Gimbal Elevation Position', fontsize=12, fontweight='bold')
@@ -221,9 +233,14 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     fig2, (ax2a, ax2b) = plt.subplots(2, 1, figsize=(10, 7), sharex=True, constrained_layout=True)
     
     # Azimuth Error
-    error_az_pid = np.abs(results_pid['log_arrays']['q_az'] - target_az_rad)
-    error_az_fbl = np.abs(results_fbl['log_arrays']['q_az'] - target_az_rad)
-    error_az_ndob = np.abs(results_ndob['log_arrays']['q_az'] - target_az_rad)
+    if 'target_az' in results_pid['log_arrays']:
+        error_az_pid = np.abs(results_pid['log_arrays']['q_az'] - results_pid['log_arrays']['target_az'])
+        error_az_fbl = np.abs(results_fbl['log_arrays']['q_az'] - results_fbl['log_arrays']['target_az'])
+        error_az_ndob = np.abs(results_ndob['log_arrays']['q_az'] - results_ndob['log_arrays']['target_az'])
+    else:
+        error_az_pid = np.abs(results_pid['log_arrays']['q_az'] - target_az_rad)
+        error_az_fbl = np.abs(results_fbl['log_arrays']['q_az'] - target_az_rad)
+        error_az_ndob = np.abs(results_ndob['log_arrays']['q_az'] - target_az_rad)
 
     ax2a.plot(t_pid, np.rad2deg(error_az_pid), color=COLOR_PID, linewidth=1.5, label='PID', alpha=0.9)
     ax2a.plot(t_fbl, np.rad2deg(error_az_fbl), color=COLOR_FBL, linewidth=1.5, label='FBL', alpha=0.9)
@@ -242,9 +259,14 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax2a.set_yscale('log')
     
     # Elevation Error
-    error_el_pid = np.abs(results_pid['log_arrays']['q_el'] - target_el_rad)
-    error_el_fbl = np.abs(results_fbl['log_arrays']['q_el'] - target_el_rad)
-    error_el_ndob = np.abs(results_ndob['log_arrays']['q_el'] - target_el_rad)
+    if 'target_el' in results_pid['log_arrays']:
+        error_el_pid = np.abs(results_pid['log_arrays']['q_el'] - results_pid['log_arrays']['target_el'])
+        error_el_fbl = np.abs(results_fbl['log_arrays']['q_el'] - results_fbl['log_arrays']['target_el'])
+        error_el_ndob = np.abs(results_ndob['log_arrays']['q_el'] - results_ndob['log_arrays']['target_el'])
+    else:
+        error_el_pid = np.abs(results_pid['log_arrays']['q_el'] - target_el_rad)
+        error_el_fbl = np.abs(results_fbl['log_arrays']['q_el'] - target_el_rad)
+        error_el_ndob = np.abs(results_ndob['log_arrays']['q_el'] - target_el_rad)
 
     ax2b.plot(t_pid, np.rad2deg(error_el_pid), color=COLOR_PID, linewidth=1.5, label='PID', alpha=0.9)
     ax2b.plot(t_fbl, np.rad2deg(error_el_fbl), color=COLOR_FBL, linewidth=1.5, label='FBL', alpha=0.9)
@@ -633,27 +655,28 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     print("\n✓ Generated 9 research-quality figures (300 DPI, LaTeX labels)")
     print("Saving figures to disk...")
     
-    output_dir = Path('figures_comparative')
-    output_dir.mkdir(exist_ok=True)
+   # output_dir = Path('figures_comparative')
+   # output_dir.mkdir(exist_ok=True)
     
-    fig1.savefig(output_dir / 'fig1_position_tracking.png', dpi=300, bbox_inches='tight')
-    fig2.savefig(output_dir / 'fig2_tracking_error_handover.png', dpi=300, bbox_inches='tight')
-    fig3.savefig(output_dir / 'fig3_torque_ndob.png', dpi=300, bbox_inches='tight')
-    fig4.savefig(output_dir / 'fig4_velocities.png', dpi=300, bbox_inches='tight')
-    fig5.savefig(output_dir / 'fig5_phase_plane.png', dpi=300, bbox_inches='tight')
-    fig6.savefig(output_dir / 'fig6_los_errors.png', dpi=300, bbox_inches='tight')
-    fig7.savefig(output_dir / 'fig7_performance_summary.png', dpi=300, bbox_inches='tight')
-    fig8.savefig(output_dir / 'fig8_state_estimates.png', dpi=300, bbox_inches='tight')
-    fig9.savefig(output_dir / 'fig9_fsm_performance.png', dpi=300, bbox_inches='tight')
+   # fig1.savefig(output_dir / 'fig1_position_tracking.png', dpi=300, bbox_inches='tight')
+    #fig2.savefig(output_dir / 'fig2_tracking_error_handover.png', dpi=300, bbox_inches='tight')
+    #fig3.savefig(output_dir / 'fig3_torque_ndob.png', dpi=300, bbox_inches='tight')
+    #fig4.savefig(output_dir / 'fig4_velocities.png', dpi=300, bbox_inches='tight')
+    #fig5.savefig(output_dir / 'fig5_phase_plane.png', dpi=300, bbox_inches='tight')
+   #fig6.savefig(output_dir / 'fig6_los_errors.png', dpi=300, bbox_inches='tight')
+   # fig7.savefig(output_dir / 'fig7_performance_summary.png', dpi=300, bbox_inches='tight')
+    #fig8.savefig(output_dir / 'fig8_state_estimates.png', dpi=300, bbox_inches='tight')
+    #fig9.savefig(output_dir / 'fig9_fsm_performance.png', dpi=300, bbox_inches='tight')
     
-    print(f"  ✓ Saved 9 figures to {output_dir.absolute()}/")
-    print("  ✓ Format: PNG, 300 DPI, bbox='tight' (publication-ready)")
-    print("\n" + "="*70)
+   # print(f"  ✓ Saved 9 figures to {output_dir.absolute()}/")
+    #print("  ✓ Format: PNG, 300 DPI, bbox='tight' (publication-ready)")
+    #print("\n" + "="*70)
     print("FIGURE GENERATION COMPLETE")
     print("="*70)
     
-    plt.show()
-
+    #plt.show()
+    fig1.show()   # shows only fig1
+    input("Press Enter to close...")
 
 def run_three_way_comparison(signal_type='constant'):
     """
@@ -666,6 +689,7 @@ def run_three_way_comparison(signal_type='constant'):
     print("\n" + "=" * 80)
     print("THREE-WAY CONTROLLER COMPARISON STUDY")
     print("=" * 80)
+    print(f"Signal Type: {signal_type.upper()}")
     print("\nTest Matrix:")
     print("  Test 1: Standard PID Controller (Baseline)")
     print("  Test 2: Feedback Linearization (FBL)")
@@ -677,10 +701,18 @@ def run_three_way_comparison(signal_type='constant'):
     # Common test parameters
     target_az_deg = 45.0
     target_el_deg = 45.0
-    duration = 2.5
+    duration = 5.0  # Increased to show full wave periods
+    
+    # Signal characteristics
+    target_amplitude = 20.0 # degrees
+    target_period = 2.0    # seconds
     
     print(f"Test Conditions:")
-    print(f"  - Target: Az={target_az_deg:.1f}°, El={target_el_deg:.1f}°")
+    print(f"  - Target Base: Az={target_az_deg:.1f}°, El={target_el_deg:.1f}°")
+    print(f"  - Signal Type: {signal_type}")
+    if signal_type != 'constant':
+        print(f"  - Amplitude: ±{target_amplitude:.1f}°")
+        print(f"  - Period: {target_period:.1f} seconds")
     print(f"  - Duration: {duration:.1f} seconds")
     print(f"  - Initial: [0°, 0°]")
     print(f"  - Friction: Az=0.1 Nm/(rad/s), El=0.1 Nm/(rad/s)")
@@ -702,6 +734,9 @@ def run_three_way_comparison(signal_type='constant'):
         target_az=np.deg2rad(target_az_deg),
         target_el=np.deg2rad(target_el_deg),
         target_enabled=True,
+        target_type=signal_type,
+        target_amplitude=target_amplitude,
+        target_period=target_period,
         use_feedback_linearization=False,  # Standard PID
         dynamics_config={
             'pan_mass': 0.5,
@@ -744,6 +779,9 @@ def run_three_way_comparison(signal_type='constant'):
         target_az=np.deg2rad(target_az_deg),
         target_el=np.deg2rad(target_el_deg),
         target_enabled=True,
+        target_type=signal_type,
+        target_amplitude=target_amplitude,
+        target_period=target_period,
         use_feedback_linearization=True,  # FL mode
         use_direct_state_feedback=True,   # Bypass EKF for cleaner controller testing
         enable_visualization=False,
@@ -763,8 +801,8 @@ def run_three_way_comparison(signal_type='constant'):
             # For critically damped: Kd = 2*ζ*ωn, Kp = ωn²
             # With ωn=20: Kp=400, Kd=36. But motor lag limits effective bandwidth.
             # Using ωn=15 for robustness: Kp=225, Kd=27
-            'kp': [150.0, 400],    # Position gain [1/s²] - increased for faster response
-            'kd': [20.0, 50],    # Velocity gain [1/s] - damping
+            'kp': [450.0, 450],    # Position gain [1/s²] - increased for faster response
+            'kd': [20.0, 150],    # Velocity gain [1/s] - damping
             'ki': [15.0, 0],      # Integral for steady-state error rejection
             'enable_integral': False,
             'tau_max': [10.0, 10.0],
@@ -785,8 +823,8 @@ def run_three_way_comparison(signal_type='constant'):
         # Enable this to estimate and compensate unmodeled disturbances (friction, etc.)
         ndob_config={
             'enable': False,  # Set True to enable NDOB disturbance compensation
-            'lambda_az': 40.0,  # Observer bandwidth Az [rad/s] (τ = 25ms)
-            'lambda_el': 40.0,  # Observer bandwidth El [rad/s]
+            'lambda_az': 100.0,  # Observer bandwidth Az [rad/s] (τ = 25ms)
+            'lambda_el': 100.0,  # Observer bandwidth El [rad/s]
             'd_max': 5.0        # Max disturbance estimate [N·m] (safety limit)
         },
         dynamics_config={
@@ -815,8 +853,8 @@ def run_three_way_comparison(signal_type='constant'):
     config_ndob = copy.deepcopy(config_fl)
     config_ndob.ndob_config = {
         'enable': True,
-        'lambda_az': 20.0,    # Reduced bandwidth for stability (τ = 50ms)
-        'lambda_el': 20.0,
+        'lambda_az': 1000.0,    # Reduced bandwidth for stability (τ = 50ms)
+        'lambda_el': 1000.0,
         'd_max': 5.0
     }
     # Disable manual friction compensation when NDOB is active to avoid double-comp
@@ -902,4 +940,18 @@ def run_three_way_comparison(signal_type='constant'):
 
 
 if __name__ == '__main__':
-    run_three_way_comparison()
+    # Available signal types: 'constant', 'square', 'sine', 'cosine'
+    # Default is 'constant' to match previous behavior
+    # User can change this to 'square', 'sine', or 'cosine' to test dynamic tracking
+    
+    # 1. Constant Target (Legacy)
+    # run_three_way_comparison(signal_type='constant')
+    
+    # 2. Square Wave Target (Requested)
+    run_three_way_comparison(signal_type='square')
+    
+    # 3. Sine Wave Target
+    # run_three_way_comparison(signal_type='sine')
+    
+    # 4. Cosine Wave Target
+    # run_three_way_comparison(signal_type='cosine')
