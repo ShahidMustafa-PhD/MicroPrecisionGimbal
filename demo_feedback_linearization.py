@@ -655,7 +655,7 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     plt.show()
 
 
-def run_three_way_comparison():
+def run_three_way_comparison(signal_type='constant'):
     """
     Execute three sequential simulations for comparative analysis.
     

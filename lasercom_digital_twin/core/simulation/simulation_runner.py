@@ -87,6 +87,9 @@ class SimulationConfig:
     target_az: float = 0.0         # Target azimuth [rad]
     target_el: float = 0.5         # Target elevation [rad]
     target_enabled: bool = True
+    target_type: str = 'constant'  # 'constant', 'square', 'sine', 'cosine'
+    target_amplitude: float = 1.0   # Amplitude for time-varying signals [deg]
+    target_period: float = 2.0      # Period for time-varying signals [s]
     
     # Controller selection
     use_feedback_linearization: bool = False  # Use FL controller instead of PID
@@ -1171,6 +1174,42 @@ class DigitalTwinRunner:
             
             self.last_log_time = self.time
     
+    def _update_targets(self, t: float) -> None:
+        """Update target setpoints based on configured signal type."""
+        if not self.config.target_enabled or self.config.target_type == 'constant':
+            return
+            
+        amp = np.deg2rad(self.config.target_amplitude)
+        period = self.config.target_period
+        freq = 1.0 / period
+        omega = 2.0 * np.pi * freq
+        
+        # Base targets (offsets)
+        base_az = getattr(self, '_base_target_az', self.config.target_az)
+        base_el = getattr(self, '_base_target_el', self.config.target_el)
+        
+        # Save base targets if not already saved (to keep them as offsets)
+        if not hasattr(self, '_base_target_az'):
+            self._base_target_az = self.config.target_az
+            self._base_target_el = self.config.target_el
+            
+        if self.config.target_type == 'square':
+            # Square wave with 50% duty cycle
+            # np.sign(np.sin) gives square wave
+            val = amp * np.sign(np.sin(omega * t))
+            self.config.target_az = base_az + val
+            self.config.target_el = base_el + val
+            
+        elif self.config.target_type == 'sine':
+            val = amp * np.sin(omega * t)
+            self.config.target_az = base_az + val
+            self.config.target_el = base_el + val
+            
+        elif self.config.target_type == 'cosine':
+            val = amp * np.cos(omega * t)
+            self.config.target_az = base_az + val
+            self.config.target_el = base_el + val
+
     def run_single_step(self) -> SimulationState:
         """
         Execute a single simulation step across all subsystems.
@@ -1178,6 +1217,9 @@ class DigitalTwinRunner:
         This method handles multi-rate execution, dynamics integration,
         sensor sampling, estimation, and control updates for one dt_sim step.
         """
+        # 0. Update time-varying targets if enabled
+        self._update_targets(self.time)
+
         # 1. Step dynamics forward
         self._step_dynamics(self.config.dt_sim)
         
