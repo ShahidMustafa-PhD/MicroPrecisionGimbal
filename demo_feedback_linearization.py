@@ -185,13 +185,13 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     
     # Azimuth Position
     ax1a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['q_az']), 
-              color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
+              color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
     ax1a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['q_az']), 
-              color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
+              color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
     ax1a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['q_az']), 
-              color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
+              color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
     ax1a.plot(t_pid, np.full_like(t_pid, target_az_deg), 
-              color=color_cmd, linewidth=1, linestyle='--', label='Command', alpha=0.7)
+              color=color_cmd, linewidth=2, linestyle='--', label='Command', alpha=0.7)
     ax1a.set_ylabel('Azimuth Angle [deg]', fontsize=11, fontweight='bold')
     ax1a.set_title('Gimbal Azimuth Position', fontsize=12, fontweight='bold')
     ax1a.legend(loc='best', fontsize=9)
@@ -199,13 +199,13 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     
     # Elevation Position
     ax1b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['q_el']), 
-              color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
+              color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
     ax1b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['q_el']), 
-              color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
+              color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
     ax1b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['q_el']), 
-              color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
+              color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
     ax1b.plot(t_pid, np.full_like(t_pid, target_el_deg), 
-              color=color_cmd, linewidth=1, linestyle='--', label='Command', alpha=0.7)
+              color=color_cmd, linewidth=2, linestyle='--', label='Command', alpha=0.7)
     ax1b.set_ylabel('Elevation Angle [deg]', fontsize=11, fontweight='bold')
     ax1b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
     ax1b.set_title('Gimbal Elevation Position', fontsize=12, fontweight='bold')
@@ -224,15 +224,15 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     error_az_pid = np.abs(results_pid['log_arrays']['q_az'] - target_az_rad)
     error_az_fbl = np.abs(results_fbl['log_arrays']['q_az'] - target_az_rad)
     error_az_ndob = np.abs(results_ndob['log_arrays']['q_az'] - target_az_rad)
-    
-    ax2a.plot(t_pid, np.rad2deg(error_az_pid), color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax2a.plot(t_fbl, np.rad2deg(error_az_fbl), color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax2a.plot(t_ndob, np.rad2deg(error_az_ndob), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
-    
+
+    ax2a.plot(t_pid, np.rad2deg(error_az_pid), color=COLOR_PID, linewidth=1.5, label='PID', alpha=0.9)
+    ax2a.plot(t_fbl, np.rad2deg(error_az_fbl), color=COLOR_FBL, linewidth=1.5, label='FBL', alpha=0.9)
+    ax2a.plot(t_ndob, np.rad2deg(error_az_ndob), color=COLOR_NDOB, linewidth=1.5, label='FBL+NDOB', alpha=0.9)
+
     # Critical handover thresholds (FSM engagement at 0.8°)
-    ax2a.axhline(0.8, color='orange', linewidth=1, linestyle=':', 
+    ax2a.axhline(0.8, color='orange', linewidth=1.5, linestyle=':', 
                  alpha=0.6, label='FSM Handover (0.8°)')
-    ax2a.axhline(1.0, color=COLOR_THRESHOLD, linewidth=1, linestyle=':', 
+    ax2a.axhline(1.0, color=COLOR_THRESHOLD, linewidth=1.5, linestyle=':', 
                  alpha=0.5, label='Performance Limit (1.0°)')
     
     ax2a.set_ylabel('Azimuth Error [deg]', fontsize=11, fontweight='bold')
@@ -245,14 +245,14 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     error_el_pid = np.abs(results_pid['log_arrays']['q_el'] - target_el_rad)
     error_el_fbl = np.abs(results_fbl['log_arrays']['q_el'] - target_el_rad)
     error_el_ndob = np.abs(results_ndob['log_arrays']['q_el'] - target_el_rad)
-    
-    ax2b.plot(t_pid, np.rad2deg(error_el_pid), color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax2b.plot(t_fbl, np.rad2deg(error_el_fbl), color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax2b.plot(t_ndob, np.rad2deg(error_el_ndob), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
-    
-    ax2b.axhline(0.8, color='orange', linewidth=1, linestyle=':', 
+
+    ax2b.plot(t_pid, np.rad2deg(error_el_pid), color=COLOR_PID, linewidth=1.5, label='PID', alpha=0.9)
+    ax2b.plot(t_fbl, np.rad2deg(error_el_fbl), color=COLOR_FBL, linewidth=1.5, label='FBL', alpha=0.9)
+    ax2b.plot(t_ndob, np.rad2deg(error_el_ndob), color=COLOR_NDOB, linewidth=1.5, label='FBL+NDOB', alpha=0.9)
+
+    ax2b.axhline(0.8, color='orange', linewidth=1.5, linestyle=':', 
                  alpha=0.6, label='FSM Handover (0.8°)')
-    ax2b.axhline(1.0, color=COLOR_THRESHOLD, linewidth=1, linestyle=':', 
+    ax2b.axhline(1.0, color=COLOR_THRESHOLD, linewidth=1.5, linestyle=':', 
                  alpha=0.5, label='Performance Limit (1.0°)')
     
     ax2b.set_ylabel('Elevation Error [deg]', fontsize=11, fontweight='bold')
@@ -589,9 +589,48 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     fig8.suptitle('EKF Performance (Estimate vs Ground Truth)', fontsize=14, fontweight='bold')
 
     # =============================================================================
+    # FIGURE 9: Fine Steering Mirror (FSM) Performance
+    # Plots FSM Tip/Tilt and Commands for all cases
+    # =============================================================================
+    fig9, (ax9a, ax9b) = plt.subplots(2, 1, figsize=(10, 7), sharex=True, constrained_layout=True)
+    
+    # FSM Tip Performance
+    ax9a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['fsm_tip']), color=COLOR_PID, linewidth=1, label='PID Tip', alpha=0.9)
+    ax9a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['fsm_tip']), color=COLOR_FBL, linewidth=1, label='FBL Tip', alpha=0.9)
+    ax9a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['fsm_tip']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB Tip', alpha=0.9)
+    
+    # FSM Tip Commands (Reference)
+    ax9a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['fsm_cmd_tip']), color=COLOR_PID, linewidth=1, linestyle='--', alpha=0.5, label='PID Cmd')
+    ax9a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['fsm_cmd_tip']), color=COLOR_FBL, linewidth=1, linestyle='--', alpha=0.5, label='FBL Cmd')
+    ax9a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['fsm_cmd_tip']), color=COLOR_NDOB, linewidth=1, linestyle='--', alpha=0.5, label='NDOB Cmd')
+    
+    ax9a.set_ylabel('Tip [deg]', fontsize=11, fontweight='bold')
+    ax9a.set_title('FSM Tip Axis Performance', fontsize=12, fontweight='bold')
+    ax9a.legend(loc='best', fontsize=8, ncol=2)
+    ax9a.grid(True, alpha=0.3, linestyle=':')
+    
+    # FSM Tilt Performance
+    ax9b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['fsm_tilt']), color=COLOR_PID, linewidth=1, label='PID Tilt', alpha=0.9)
+    ax9b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['fsm_tilt']), color=COLOR_FBL, linewidth=1, label='FBL Tilt', alpha=0.9)
+    ax9b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['fsm_tilt']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB Tilt', alpha=0.9)
+    
+    # FSM Tilt Commands (Reference)
+    ax9b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['fsm_cmd_tilt']), color=COLOR_PID, linewidth=1, linestyle='--', alpha=0.5)
+    ax9b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['fsm_cmd_tilt']), color=COLOR_FBL, linewidth=1, linestyle='--', alpha=0.5)
+    ax9b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['fsm_cmd_tilt']), color=COLOR_NDOB, linewidth=1, linestyle='--', alpha=0.5)
+    
+    ax9b.set_ylabel('Tilt [deg]', fontsize=11, fontweight='bold')
+    ax9b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
+    ax9b.set_title('FSM Tilt Axis Performance', fontsize=12, fontweight='bold')
+    ax9b.legend(loc='best', fontsize=8)
+    ax9b.grid(True, alpha=0.3, linestyle=':')
+    
+    fig9.suptitle('FSM Tip/Tilt Response vs Commands', fontsize=14, fontweight='bold')
+
+    # =============================================================================
     # Save all figures to disk (300 DPI, publication quality)
     # =============================================================================
-    print("\n✓ Generated 8 research-quality figures (300 DPI, LaTeX labels)")
+    print("\n✓ Generated 9 research-quality figures (300 DPI, LaTeX labels)")
     print("Saving figures to disk...")
     
     output_dir = Path('figures_comparative')
@@ -605,8 +644,9 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     fig6.savefig(output_dir / 'fig6_los_errors.png', dpi=300, bbox_inches='tight')
     fig7.savefig(output_dir / 'fig7_performance_summary.png', dpi=300, bbox_inches='tight')
     fig8.savefig(output_dir / 'fig8_state_estimates.png', dpi=300, bbox_inches='tight')
+    fig9.savefig(output_dir / 'fig9_fsm_performance.png', dpi=300, bbox_inches='tight')
     
-    print(f"  ✓ Saved 8 figures to {output_dir.absolute()}/")
+    print(f"  ✓ Saved 9 figures to {output_dir.absolute()}/")
     print("  ✓ Format: PNG, 300 DPI, bbox='tight' (publication-ready)")
     print("\n" + "="*70)
     print("FIGURE GENERATION COMPLETE")
