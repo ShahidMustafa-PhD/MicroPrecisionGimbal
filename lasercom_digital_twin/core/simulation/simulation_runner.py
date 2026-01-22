@@ -261,10 +261,10 @@ class DigitalTwinRunner:
         # Create    seperate dynamics instance for computing simulations. The real model.
         # This is NOT used for the NDOB and feedback linearization.
         self.dynamics_sim = GimbalDynamics(
-            pan_mass=self.pan_mass,
-            tilt_mass=self.tilt_mass,
-            cm_r=self.cm_r,
-            cm_h=self.cm_h,
+            pan_mass=self.pan_mass+0.1,
+            tilt_mass=self.tilt_mass+0.05,
+            cm_r=self.cm_r+0.002,
+            cm_h=self.cm_h+0.005,
             gravity=self.gravity
         )
         
@@ -1333,8 +1333,8 @@ class DigitalTwinRunner:
         
         # Compute performance summary
         results = self._compute_summary()
-        if self.config.enable_plotting:
-            self.plot_results()
+       # if self.config.enable_plotting:
+           # self.plot_results()
         return results
     
     def _compute_summary(self) -> Dict:
