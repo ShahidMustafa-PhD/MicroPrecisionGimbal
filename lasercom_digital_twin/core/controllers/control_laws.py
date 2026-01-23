@@ -687,11 +687,13 @@ class FeedbackLinearizationController(BaseController):
         # 2.1 Update Nonlinear Disturbance Observer (NDOB)
         # Uses the dynamics model and measurements to estimate lumped disturbances
         # tau_prev is the torque applied during the previous step (k-1)
+        # CRITICAL: Pass ddq_ref so NDOB doesn't mistake commanded acceleration for disturbance
         d_hat_ndob = np.zeros(2)
         if self.ndob is not None:
             # Update observer and get estimate
             # dt is the control cycle duration
-            d_hat_ndob = self.ndob.update(q, dq, self.previous_output, dt)
+            # Pass ddq_ref to prevent square wave transients from being seen as disturbance
+            d_hat_ndob = self.ndob.update(q, dq, self.previous_output, dt, ddq_ref=ddq_ref)
 
         # 3. Outer Loop: Define the desired acceleration in linearized space
         error = q_ref - q
@@ -781,6 +783,7 @@ class FeedbackLinearizationController(BaseController):
             'friction_comp': friction_comp,
             'u_robust': u_robust if self.enable_robust_term else np.zeros(2),
             'dist_compensated': d_hat,
+            'd_hat_ndob': d_hat_ndob,  # Add NDOB estimate to metadata
             'tau_unsaturated': tau,
             'saturation_active': np.any(u_saturated != tau),
             'conditional_friction_active': self.conditional_friction

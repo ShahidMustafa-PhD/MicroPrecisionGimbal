@@ -77,6 +77,8 @@ class NDOBConfig:
     lambda_el: float = 40.0
     d_max: float = 5.0  # Max disturbance estimate [Nm]
     enable: bool = True
+    transient_threshold: float = 2.0  # Torque change threshold [Nm] for transient detection
+    transient_freeze_steps: int = 5  # Number of steps to freeze integration after transient
 
 
 class NonlinearDisturbanceObserver:
@@ -152,8 +154,19 @@ class NonlinearDisturbanceObserver:
         # Diagonal gain matrix L = diag(λ_az, λ_el)
         self._L: np.ndarray = np.diag([self.config.lambda_az, self.config.lambda_el])
         
-        # Initialization flag
+        # Initialization flag - when False, z will be initialized to -p on first update
+        # This ensures d_hat = z + p = 0 at startup (bumpless initialization)
         self._initialized: bool = False
+        
+        # Warm-up counter: ramp up NDOB output over this many steps to prevent
+        # initial transients from destabilizing the control loop
+        self._warmup_steps: int = 0
+        self._warmup_duration: int = 50  # ~50ms at 1kHz, ~500ms at 100Hz
+        
+        # Transient detection: freeze integrator during large command changes
+        # This prevents square wave edges from being interpreted as disturbances
+        self._tau_prev: np.ndarray = np.zeros(2)
+        self._freeze_counter: int = 0
         
         # Diagnostic: last computed values for debugging
         self._last_p: np.ndarray = np.zeros(2)
@@ -208,6 +221,7 @@ class NonlinearDisturbanceObserver:
         self._z = np.zeros(2)
         self._d_hat = np.zeros(2)
         self._initialized = False
+        self._warmup_steps = 0
         self._last_p = np.zeros(2)
         self._last_z_dot = np.zeros(2)
     
@@ -246,7 +260,8 @@ class NonlinearDisturbanceObserver:
                q_meas: np.ndarray, 
                dq_meas: np.ndarray, 
                tau_applied: np.ndarray, 
-               dt: float) -> np.ndarray:
+               dt: float,
+               ddq_ref: Optional[np.ndarray] = None) -> np.ndarray:
         """
         Update the disturbance observer and return the estimate.
         
@@ -264,18 +279,26 @@ class NonlinearDisturbanceObserver:
             IMPORTANT: Use τ(k-1) at step k for causality!
         dt : float
             Time step [s]
+        ddq_ref : Optional[np.ndarray]
+            Reference acceleration [rad/s²] (2,). CRITICAL for non-smooth commands
+            like square waves. When provided, the NDOB subtracts the commanded
+            acceleration component M*ddq_ref from tau_applied, preventing the
+            observer from mistaking feedforward torque as external disturbance.
         
         Returns
         -------
         np.ndarray
             Estimated lumped disturbance d_hat [Nm] (2,)
         
-        Observer Dynamics (Forward Euler)
-        ---------------------------------
+        Observer Dynamics (Modified for Reference Tracking)
+        ----------------------------------------------------
         $$z_{k+1} = z_k + dt \\cdot \\dot{z}_k$$
         
         where:
-        $$\\dot{z} = -Lz + L\\left[C(q,\\dot{q})\\dot{q} + G(q) - \\tau - p(q,\\dot{q})\\right]$$
+        $$\\dot{z} = -Lz + L\\left[C(q,\\dot{q})\\dot{q} + G(q) - (\\tau - M\\ddot{q}_{ref}) - p(q,\\dot{q})\\right]$$
+        
+        The key modification is subtracting M*ddq_ref from tau, which removes
+        the feedforward acceleration torque from the disturbance estimate.
         
         Disturbance Estimate:
         $$\\hat{d} = z + p(q,\\dot{q})$$
@@ -283,6 +306,16 @@ class NonlinearDisturbanceObserver:
         # Early exit if disabled
         if not self.config.enable:
             self._d_hat = np.zeros(2)
+            return self._d_hat.copy()
+        
+        # Early exit if gains are zero (strict FBL fallback)
+        # When L=0, the observer provides no estimation and should return zero
+        # This prevents numerical issues and guarantees FBL equivalence
+        if np.allclose(np.diag(self._L), 0.0, atol=1e-12):
+            self._z = np.zeros(2)  # Ensure z is zeroed
+            self._d_hat = np.zeros(2)
+            self._last_p = np.zeros(2)
+            self._last_z_dot = np.zeros(2)
             return self._d_hat.copy()
         
         # Validate inputs
@@ -298,27 +331,71 @@ class NonlinearDisturbanceObserver:
         p = self._compute_auxiliary_p(q, dq)
         self._last_p = p.copy()
         
+        # BUMPLESS INITIALIZATION: On first update, set z = -p so that d_hat = z + p = 0
+        # This prevents the massive initial transient caused by L*M*dq dominating
+        if not self._initialized:
+            self._z = -p.copy()
+            self._initialized = True
+            self._warmup_steps = 0
+            self._d_hat = np.zeros(2)
+            self._last_z_dot = np.zeros(2)
+            return self._d_hat.copy()
+        
+        # TRANSIENT DETECTION: Detect large torque changes (square wave edges)
+        # If tau changes by more than threshold, freeze integration to prevent windup
+        tau_change = np.abs(tau - self._tau_prev)
+        is_transient = np.any(tau_change > self.config.transient_threshold)
+        
+        if is_transient:
+            self._freeze_counter = self.config.transient_freeze_steps
+        
+        # Update tau history for next step
+        self._tau_prev = tau.copy()
+        
         # Compute Coriolis + gravity terms
         coriolis_term = C @ dq
         
-        # Observer dynamics:
-        # ż = -Lz + L[C*dq + G - τ - p]
-        #   = -Lz + L*C*dq + L*G - L*τ - L*p
-        inner_term = coriolis_term + G - tau - p
+        # CRITICAL FIX: Subtract reference acceleration component from tau
+        # This prevents the NDOB from interpreting commanded acceleration (e.g.,
+        # square wave edges) as external disturbance.
+        if ddq_ref is not None:
+            M = self.dynamics.get_mass_matrix(q)
+            tau_feedforward = M @ np.asarray(ddq_ref).flatten()[:2]
+            tau_adjusted = tau - tau_feedforward
+        else:
+            tau_adjusted = tau
+        
+        # Observer dynamics (modified for reference tracking):
+        # ż = -Lz + L[C*dq + G - (τ - M*ddq_ref) - p]
+        #   = -Lz + L*C*dq + L*G - L*(τ - M*ddq_ref) - L*p
+        inner_term = coriolis_term + G - tau_adjusted - p
         z_dot = -self._L @ self._z + self._L @ inner_term
         self._last_z_dot = z_dot.copy()
         
-        # Forward Euler integration
-        self._z = self._z + dt * z_dot
+        # CONDITIONAL INTEGRATION: Freeze during transients
+        if self._freeze_counter > 0:
+            # Don't integrate during transient - hold z constant
+            self._freeze_counter -= 1
+            # z_dot is computed but not applied
+        else:
+            # Forward Euler integration (normal operation)
+            self._z = self._z + dt * z_dot
         
         # Compute disturbance estimate: d_hat = z + p
-        self._d_hat = self._z + p
+        d_hat_raw = self._z + p
         
         # Apply saturation for safety
         d_max = self.config.d_max
-        self._d_hat = np.clip(self._d_hat, -d_max, d_max)
+        d_hat_saturated = np.clip(d_hat_raw, -d_max, d_max)
         
-        self._initialized = True
+        # WARM-UP RAMP: Gradually ramp up NDOB output to prevent transients
+        # This gives the observer time to converge before fully affecting control
+        self._warmup_steps += 1
+        if self._warmup_steps < self._warmup_duration:
+            warmup_gain = float(self._warmup_steps) / float(self._warmup_duration)
+            self._d_hat = warmup_gain * d_hat_saturated
+        else:
+            self._d_hat = d_hat_saturated
         
         return self._d_hat.copy()
     

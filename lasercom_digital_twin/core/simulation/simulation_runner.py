@@ -1172,6 +1172,10 @@ class DigitalTwinRunner:
             self.log_data['pid_saturated_az'].append(bool(sat[0]))
             self.log_data['pid_saturated_el'].append(bool(sat[1]))
             
+            # NDOB disturbance estimates
+            self.log_data['d_hat_ndob_az'].append(float(self.state.d_hat_ndob_az))
+            self.log_data['d_hat_ndob_el'].append(float(self.state.d_hat_ndob_el))
+            
             self.last_log_time = self.time
     
     def _update_targets(self, t: float) -> None:
