@@ -182,6 +182,7 @@ class SimulationState:
     # NDOB (Nonlinear Disturbance Observer) estimates
     d_hat_ndob_az: float = 0.0     # Estimated disturbance Az [N·m]
     d_hat_ndob_el: float = 0.0     # Estimated disturbance El [N·m]
+    ndob_velocity_clipped: bool = False  # NDOB velocity clipping status
 
 
 class DigitalTwinRunner:
@@ -264,10 +265,10 @@ class DigitalTwinRunner:
         # Create    seperate dynamics instance for computing simulations. The real model.
         # This is NOT used for the NDOB and feedback linearization.
         self.dynamics_sim = GimbalDynamics(
-            pan_mass=self.pan_mass+0.1,
-            tilt_mass=self.tilt_mass+0.05,
-            cm_r=self.cm_r+0.002,
-            cm_h=self.cm_h+0.005,
+            pan_mass=self.pan_mass,
+            tilt_mass=self.tilt_mass,
+            cm_r=self.cm_r,
+            cm_h=self.cm_h,
             gravity=self.gravity
         )
         
@@ -586,6 +587,7 @@ class DigitalTwinRunner:
             'target_az', 'target_el',
             # NDOB disturbance estimates
             'd_hat_ndob_az', 'd_hat_ndob_el',
+            'ndob_velocity_clipped',
             # Coarse-loop diagnostics (available for PID; best-effort for FL)
             'coarse_tau_cmd_az', 'coarse_tau_cmd_el',
             'coarse_v_cmd_az', 'coarse_v_cmd_el',
@@ -896,6 +898,13 @@ class DigitalTwinRunner:
         self.state.d_hat_ndob_az = d_hat_ndob[0] if len(d_hat_ndob) > 0 else 0.0
         self.state.d_hat_ndob_el = d_hat_ndob[1] if len(d_hat_ndob) > 1 else 0.0
         
+        # Extract NDOB velocity clipping status (if present)
+        if hasattr(self.coarse_controller, 'ndob') and self.coarse_controller.ndob is not None:
+            ndob_diag = self.coarse_controller.ndob.get_diagnostics()
+            self.state.ndob_velocity_clipped = ndob_diag.get('is_velocity_clipped', False)
+        else:
+            self.state.ndob_velocity_clipped = False
+        
         # Store for FSM controller
         self.coarse_residual = residual_error
         
@@ -1175,6 +1184,9 @@ class DigitalTwinRunner:
             # NDOB disturbance estimates
             self.log_data['d_hat_ndob_az'].append(float(self.state.d_hat_ndob_az))
             self.log_data['d_hat_ndob_el'].append(float(self.state.d_hat_ndob_el))
+            
+            # NDOB velocity clipping status (for diagnostics)
+            self.log_data['ndob_velocity_clipped'].append(bool(self.state.ndob_velocity_clipped))
             
             self.last_log_time = self.time
     

@@ -84,8 +84,11 @@ def run_handover_verification() -> Dict:
             'amplitude_rad': 100e-6,
             'harmonics': [(1.0, 1.0), (2.1, 0.3)]
         },
+         #'kp': [150.0, 400],    # Position gain [1/s²] - increased for faster response
+           # 'kd': [20.0, 50],    # Velocity gain [1/s] - damping
+           # 'ki': [15.0, 0],      # Integral for steady-state error rejection
         feedback_linearization_config={
-            'kp': [150.0, 150.0],
+            'kp': [150.0, 300.0],
             'kd': [20.0, 20.0],
             'ki': [15.0, 15.0],
             'enable_integral': True,
@@ -102,8 +105,8 @@ def run_handover_verification() -> Dict:
             'cm_r': 0.0,
             'cm_h': 0.0,
             'gravity': 9.81,
-            'friction_az': 0.1,
-            'friction_el': 0.1
+            'friction_az': 0.01,
+            'friction_el': 0.01
         },
         qpd_config={
             'linear_range': np.deg2rad(FSM_LINEAR_RANGE_DEG),  # QPD FOV = FSM range
