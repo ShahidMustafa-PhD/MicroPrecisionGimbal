@@ -183,6 +183,20 @@ class SimulationState:
     d_hat_ndob_az: float = 0.0     # Estimated disturbance Az [N·m]
     d_hat_ndob_el: float = 0.0     # Estimated disturbance El [N·m]
     ndob_velocity_clipped: bool = False  # NDOB velocity clipping status
+    
+    # EKF Diagnostics (covariance, innovation, adaptive tuning)
+    ekf_cov_theta_az: float = 0.0         # State covariance P[0,0] (θ_Az) [rad²]
+    ekf_cov_theta_dot_az: float = 0.0     # State covariance P[1,1] (θ̇_Az) [(rad/s)²]
+    ekf_cov_bias_az: float = 0.0          # State covariance P[2,2] (b_Az) [(rad/s)²]
+    ekf_cov_theta_el: float = 0.0         # State covariance P[3,3] (θ_El) [rad²]
+    ekf_cov_theta_dot_el: float = 0.0     # State covariance P[4,4] (θ̇_El) [(rad/s)²]
+    ekf_cov_bias_el: float = 0.0          # State covariance P[5,5] (b_El) [(rad/s)²]
+    ekf_innovation_enc_az: float = 0.0    # Innovation residual (encoder Az) [rad]
+    ekf_innovation_enc_el: float = 0.0    # Innovation residual (encoder El) [rad]
+    ekf_innovation_gyro_az: float = 0.0   # Innovation residual (gyro Az) [rad/s]
+    ekf_innovation_gyro_el: float = 0.0   # Innovation residual (gyro El) [rad/s]
+    ekf_innovation_3sigma_az: float = 0.0 # 3-sigma bound for Az encoder [rad]
+    ekf_innovation_3sigma_el: float = 0.0 # 3-sigma bound for El encoder [rad]
 
 
 class DigitalTwinRunner:
@@ -252,6 +266,12 @@ class DigitalTwinRunner:
         self.voltage_cmd_el: float = 0.0
         self.last_tau_cmd: np.ndarray = np.zeros(2)
         self.last_coarse_meta: Dict = {}
+        
+        # Target trajectory feedforward (velocity/acceleration for dynamic tracking)
+        self._target_vel_az: float = 0.0
+        self._target_vel_el: float = 0.0
+        self._target_accel_az: float = 0.0
+        self._target_accel_el: float = 0.0
         
         # Initialize GimbalDynamics
         self.dynamics = GimbalDynamics(
@@ -472,10 +492,22 @@ class DigitalTwinRunner:
         self.frame_compensator = OpticalFrameCompensator(frame_config)
     
     def _init_estimator(self) -> None:
-        """Initialize Extended Kalman Filter."""
+        """Initialize Extended Kalman Filter.
+        
+        TUNING PHILOSOPHY:
+        -----------------
+        For ideal sensor conditions (simulation with no/low noise):
+        1. R (measurement noise): Very low to trust sensors
+        2. Q[DIST]: Very high ("liquid") to absorb model errors
+        3. P[position]: Low initial to lock onto sensors immediately
+        
+        This prevents the EKF from "smoothing away" real signals.
+        """
         # Get dynamics parameters from config to match plant dynamics
         dynamics_cfg = self.config.dynamics_config or {}
         
+        # EKF-TUNED PARAMETERS FOR LOW-FREQUENCY TRACKING
+        # These values allow tracking of 0.1 Hz and slower sine waves
         estimator_config = self.config.estimator_config or {
             'initial_state': np.zeros(10),
             'inertia_az': self.inertia_az,
@@ -485,11 +517,15 @@ class DigitalTwinRunner:
             # Pass dynamics parameters so EKF uses same model as plant
             'pan_mass': dynamics_cfg.get('pan_mass', 0.5),
             'tilt_mass': dynamics_cfg.get('tilt_mass', 0.25),
-            'cm_r': dynamics_cfg.get('cm_r', 0.0),  # Match plant default
-            'cm_h': dynamics_cfg.get('cm_h', 0.0),  # Match plant default  
+            'cm_r': dynamics_cfg.get('cm_r', 0.0),
+            'cm_h': dynamics_cfg.get('cm_h', 0.0),
             'gravity': dynamics_cfg.get('gravity', 9.81),
-            'process_noise_std': [1e-8, 1e-6, 1e-9, 1e-8, 1e-6, 1e-9, 1e-7, 1e-6, 1e-4, 1e-4],
-            'measurement_noise_std': [2.4e-5, 2.4e-5, 1e-6, 1e-6, 1e-4, 1e-4]
+            # TUNED Q: High disturbance noise to absorb model errors
+            # [θ_Az, θ̇_Az, b_Az, θ_El, θ̇_El, b_El, φ_roll, φ̇_roll, d_Az, d_El]
+            'process_noise_std': [1e-8, 1e-6, 1e-9, 1e-8, 1e-6, 1e-9, 1e-7, 1e-6, 1e-1, 1e-1],
+            # TUNED R: Very low encoder noise (ideal sensors), high QPD (placeholder)
+            # [enc_Az, enc_El, gyro_Az, gyro_El, qpd_x, qpd_y]
+            'measurement_noise_std': [1e-6, 1e-6, 1e-6, 1e-6, 1e-2, 1e-2]
         }
         
         self.estimator = PointingStateEstimator(estimator_config)
@@ -825,6 +861,32 @@ class DigitalTwinRunner:
         self.state.est_el = fused_state['theta_el']
         self.state.est_az_dot = fused_state['theta_dot_az']
         self.state.est_el_dot = fused_state['theta_dot_el']
+        
+        # Store EKF diagnostics for analysis (covariance, innovation)
+        # This enables Figure 11 visualization for adaptive tuning validation
+        ekf_diag = self.estimator.get_diagnostics()
+        cov_diag = ekf_diag['covariance_diag']
+        innovation = ekf_diag['innovation']
+        
+        # Store covariance diagonal elements (position, velocity, bias for Az/El)
+        self.state.ekf_cov_theta_az = float(cov_diag[0])  # StateIndex.THETA_AZ
+        self.state.ekf_cov_theta_dot_az = float(cov_diag[1])  # StateIndex.THETA_DOT_AZ
+        self.state.ekf_cov_bias_az = float(cov_diag[2])  # StateIndex.BIAS_AZ
+        self.state.ekf_cov_theta_el = float(cov_diag[3])  # StateIndex.THETA_EL
+        self.state.ekf_cov_theta_dot_el = float(cov_diag[4])  # StateIndex.THETA_DOT_EL
+        self.state.ekf_cov_bias_el = float(cov_diag[5])  # StateIndex.BIAS_EL
+        
+        # Store innovation (measurement residuals)
+        self.state.ekf_innovation_enc_az = float(innovation[0])  # MeasurementIndex.THETA_AZ_ENC
+        self.state.ekf_innovation_enc_el = float(innovation[1])  # MeasurementIndex.THETA_EL_ENC
+        self.state.ekf_innovation_gyro_az = float(innovation[2])  # MeasurementIndex.THETA_DOT_AZ_GYRO
+        self.state.ekf_innovation_gyro_el = float(innovation[3])  # MeasurementIndex.THETA_DOT_EL_GYRO
+        
+        # Store 3-sigma bounds for consistency checking (sqrt of innovation covariance)
+        # Note: Innovation covariance S = H*P*H^T + R, diagonal elements give variance
+        # For now, use simplified approach: 3*sqrt(P_ii) for position measurements
+        self.state.ekf_innovation_3sigma_az = 3.0 * np.sqrt(cov_diag[0])
+        self.state.ekf_innovation_3sigma_el = 3.0 * np.sqrt(cov_diag[3])
     
     def _update_coarse_controller(self) -> None:
         """
@@ -837,9 +899,20 @@ class DigitalTwinRunner:
         
         Runs at coarse control rate (~10 Hz).
         """
-        # Setpoints (target tracking)
+        # Setpoints (target tracking) - position, velocity, acceleration
         setpoint = np.array([self.config.target_az, self.config.target_el])
-        setpoint_vel = np.zeros(2)  # Assume stationary target
+        
+        # Get target velocity for feedforward (CRITICAL for tracking dynamic trajectories)
+        setpoint_vel = np.array([
+            getattr(self, '_target_vel_az', 0.0),
+            getattr(self, '_target_vel_el', 0.0)
+        ])
+        
+        # Get target acceleration for feedforward
+        setpoint_accel = np.array([
+            getattr(self, '_target_accel_az', 0.0),
+            getattr(self, '_target_accel_el', 0.0)
+        ])
         
         # Estimated state from EKF (already updated)
         position_est = np.array([self.state.est_az, self.state.est_el])
@@ -870,7 +943,7 @@ class DigitalTwinRunner:
                 dq_ref=setpoint_vel,
                 state_estimate=fused_state,
                 dt=self.config.dt_coarse,
-                ddq_ref=None  # Assume zero acceleration reference
+                ddq_ref=setpoint_accel  # Use computed acceleration feedforward
             )
             
             # For FSM feedforward, use tracking error from metadata
@@ -1202,11 +1275,35 @@ class DigitalTwinRunner:
             self.log_data['tau_unsaturated_az'].append(float(tau_unsat[0]))
             self.log_data['tau_unsaturated_el'].append(float(tau_unsat[1]))
             
+            # EKF Diagnostics (covariance, innovation, adaptive tuning)
+            self.log_data['ekf_cov_theta_az'].append(float(self.state.ekf_cov_theta_az))
+            self.log_data['ekf_cov_theta_dot_az'].append(float(self.state.ekf_cov_theta_dot_az))
+            self.log_data['ekf_cov_bias_az'].append(float(self.state.ekf_cov_bias_az))
+            self.log_data['ekf_cov_theta_el'].append(float(self.state.ekf_cov_theta_el))
+            self.log_data['ekf_cov_theta_dot_el'].append(float(self.state.ekf_cov_theta_dot_el))
+            self.log_data['ekf_cov_bias_el'].append(float(self.state.ekf_cov_bias_el))
+            self.log_data['ekf_innovation_enc_az'].append(float(self.state.ekf_innovation_enc_az))
+            self.log_data['ekf_innovation_enc_el'].append(float(self.state.ekf_innovation_enc_el))
+            self.log_data['ekf_innovation_gyro_az'].append(float(self.state.ekf_innovation_gyro_az))
+            self.log_data['ekf_innovation_gyro_el'].append(float(self.state.ekf_innovation_gyro_el))
+            self.log_data['ekf_innovation_3sigma_az'].append(float(self.state.ekf_innovation_3sigma_az))
+            self.log_data['ekf_innovation_3sigma_el'].append(float(self.state.ekf_innovation_3sigma_el))
+            
             self.last_log_time = self.time
     
     def _update_targets(self, t: float) -> None:
-        """Update target setpoints based on configured signal type."""
+        """
+        Update target setpoints based on configured signal type.
+        
+        Also computes target velocity and acceleration for feedforward control.
+        This is CRITICAL for tracking dynamic trajectories (sine waves, etc.)
+        """
         if not self.config.target_enabled or self.config.target_type == 'constant':
+            # Constant target: zero velocity and acceleration
+            self._target_vel_az = 0.0
+            self._target_vel_el = 0.0
+            self._target_accel_az = 0.0
+            self._target_accel_el = 0.0
             return
             
         amp = np.deg2rad(self.config.target_amplitude)
@@ -1225,20 +1322,42 @@ class DigitalTwinRunner:
             
         if self.config.target_type == 'square':
             # Square wave with 50% duty cycle
-            # np.sign(np.sin) gives square wave
             val = amp * np.sign(np.sin(omega * t))
             self.config.target_az = base_az + val
             self.config.target_el = base_el + val
+            # Square wave: derivative is zero except at transitions
+            self._target_vel_az = 0.0
+            self._target_vel_el = 0.0
+            self._target_accel_az = 0.0
+            self._target_accel_el = 0.0
             
         elif self.config.target_type == 'sine':
+            # Position: A * sin(ωt)
             val = amp * np.sin(omega * t)
             self.config.target_az = base_az + val
             self.config.target_el = base_el + val
+            # Velocity: A * ω * cos(ωt)
+            val_dot = amp * omega * np.cos(omega * t)
+            self._target_vel_az = val_dot
+            self._target_vel_el = val_dot
+            # Acceleration: -A * ω² * sin(ωt)
+            val_ddot = -amp * omega * omega * np.sin(omega * t)
+            self._target_accel_az = val_ddot
+            self._target_accel_el = val_ddot
             
         elif self.config.target_type == 'cosine':
+            # Position: A * cos(ωt)
             val = amp * np.cos(omega * t)
             self.config.target_az = base_az + val
             self.config.target_el = base_el + val
+            # Velocity: -A * ω * sin(ωt)
+            val_dot = -amp * omega * np.sin(omega * t)
+            self._target_vel_az = val_dot
+            self._target_vel_el = val_dot
+            # Acceleration: -A * ω² * cos(ωt)
+            val_ddot = -amp * omega * omega * np.cos(omega * t)
+            self._target_accel_az = val_ddot
+            self._target_accel_el = val_ddot
 
     def run_single_step(self) -> SimulationState:
         """
