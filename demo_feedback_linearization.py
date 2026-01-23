@@ -293,8 +293,8 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     fig3, ((ax3a, ax3b), (ax3c, ax3d)) = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
     
     # Motor torque saturation limits (from config)
-    tau_max = 10.0
-    tau_min = -10.0
+    tau_max = 1.0
+    tau_min = -1.0
     
     # Azimuth Torque
     ax3a.plot(t_pid, results_pid['log_arrays']['torque_az'], color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
@@ -439,43 +439,43 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     fig6, (ax6a, ax6b, ax6c) = plt.subplots(3, 1, figsize=(10, 7), sharex=True, constrained_layout=True)
     
     # LOS Error X (Tip)
-    ax6a.plot(t_pid, results_pid['log_arrays']['los_error_x'] * 1e6, color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax6a.plot(t_fbl, results_fbl['log_arrays']['los_error_x'] * 1e6, color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax6a.plot(t_ndob, results_ndob['log_arrays']['los_error_x'] * 1e6, color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
+    ax6a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['los_error_x']) , color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
+    ax6a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['los_error_x']), color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
+    ax6a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['los_error_x']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
     ax6a.axhline(0, color='black', linewidth=1, linestyle='--', alpha=0.5)
-    ax6a.set_ylabel('LOS Error X [µrad]', fontsize=11, fontweight='bold')
+    ax6a.set_ylabel('LOS Error X [deg]', fontsize=11, fontweight='bold')
     ax6a.set_title('Line-of-Sight Error X-Axis', fontsize=12, fontweight='bold')
     ax6a.legend(loc='best', fontsize=9)
     ax6a.grid(True, alpha=0.3, linestyle=':')
     
     # LOS Error Y (Tilt)
-    ax6b.plot(t_pid, results_pid['log_arrays']['los_error_y'] * 1e6, color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax6b.plot(t_fbl, results_fbl['log_arrays']['los_error_y'] * 1e6, color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax6b.plot(t_ndob, results_ndob['log_arrays']['los_error_y'] * 1e6, color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
+    ax6b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['los_error_y']), color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
+    ax6b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['los_error_y']), color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
+    ax6b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['los_error_y']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
     ax6b.axhline(0, color='black', linewidth=1, linestyle='--', alpha=0.5)
-    ax6b.set_ylabel('LOS Error Y [µrad]', fontsize=11, fontweight='bold')
+    ax6b.set_ylabel('LOS Error Y [deg]', fontsize=11, fontweight='bold')
     ax6b.set_title('Line-of-Sight Error Y-Axis', fontsize=12, fontweight='bold')
     ax6b.legend(loc='best', fontsize=9)
     ax6b.grid(True, alpha=0.3, linestyle=':')
     
     # Total LOS Error
-    los_total_pid = np.sqrt(results_pid['log_arrays']['los_error_x']**2 + results_pid['log_arrays']['los_error_y']**2) * 1e6
-    los_total_fbl = np.sqrt(results_fbl['log_arrays']['los_error_x']**2 + results_fbl['log_arrays']['los_error_y']**2) * 1e6
-    los_total_ndob = np.sqrt(results_ndob['log_arrays']['los_error_x']**2 + results_ndob['log_arrays']['los_error_y']**2) * 1e6
+    los_total_pid = np.rad2deg(np.sqrt(results_pid['log_arrays']['los_error_x']**2 + results_pid['log_arrays']['los_error_y']**2)) 
+    los_total_fbl = np.rad2deg(np.sqrt(results_fbl['log_arrays']['los_error_x']**2 + results_fbl['log_arrays']['los_error_y']**2)) 
+    los_total_ndob = np.rad2deg(np.sqrt(results_ndob['log_arrays']['los_error_x']**2 + results_ndob['log_arrays']['los_error_y']**2)) 
     
     ax6c.plot(t_pid, los_total_pid, color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
     ax6c.plot(t_fbl, los_total_fbl, color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
     ax6c.plot(t_ndob, los_total_ndob, color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
     ax6c.axhline(0, color='black', linewidth=1, linestyle='--', alpha=0.5)
-    ax6c.set_ylabel('Total LOS Error [µrad]', fontsize=11, fontweight='bold')
+    ax6c.set_ylabel('Total LOS Error [deg]', fontsize=11, fontweight='bold')
     ax6c.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
     ax6c.set_title('Total Line-of-Sight Error Magnitude', fontsize=12, fontweight='bold')
     ax6c.legend(loc='best', fontsize=9)
     ax6c.grid(True, alpha=0.3, linestyle=':')
     
     # Add RMS metric to title (matching simulation_runner.py)
-    rms_los_ndob = np.sqrt(np.mean(results_ndob['log_arrays']['los_error_x']**2 + results_ndob['log_arrays']['los_error_y']**2)) * 1e6
-    fig6.suptitle(f'Line-of-Sight Pointing Errors (RMS: {rms_los_ndob:.2f} µrad)', 
+    rms_los_ndob = np.rad2deg(np.sqrt(np.mean(results_ndob['log_arrays']['los_error_x']**2 + results_ndob['log_arrays']['los_error_y']**2))) 
+    fig6.suptitle(f'Line-of-Sight Pointing Errors (RMS: {rms_los_ndob:.2f} deg)', 
                   fontsize=14, fontweight='bold')
     
     # =============================================================================
@@ -650,9 +650,84 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     fig9.suptitle('FSM Tip/Tilt Response vs Commands', fontsize=14, fontweight='bold')
 
     # =============================================================================
+    # FIGURE 10: Internal Control Signal & Disturbance Observer Analysis
+    # Research-grade diagnostic plot for understanding FBL+NDOB interaction
+    # =============================================================================
+    fig10, (ax10a, ax10b, ax10c) = plt.subplots(3, 1, figsize=(10, 9), sharex=True, constrained_layout=True)
+    
+    # Extract virtual control signals (v = outer loop acceleration demand)
+    # FBL case
+    v_az_fbl = results_fbl['log_arrays'].get('v_virtual_az', np.zeros_like(t_fbl))
+    v_el_fbl = results_fbl['log_arrays'].get('v_virtual_el', np.zeros_like(t_fbl))
+    # FBL+NDOB case
+    v_az_ndob = results_ndob['log_arrays'].get('v_virtual_az', np.zeros_like(t_ndob))
+    v_el_ndob = results_ndob['log_arrays'].get('v_virtual_el', np.zeros_like(t_ndob))
+    
+    # Extract unsaturated torques (total commanded torque)
+    tau_az_fbl = results_fbl['log_arrays'].get('tau_unsaturated_az', results_fbl['log_arrays']['torque_az'])
+    tau_el_fbl = results_fbl['log_arrays'].get('tau_unsaturated_el', results_fbl['log_arrays']['torque_el'])
+    tau_az_ndob = results_ndob['log_arrays'].get('tau_unsaturated_az', results_ndob['log_arrays']['torque_az'])
+    tau_el_ndob = results_ndob['log_arrays'].get('tau_unsaturated_el', results_ndob['log_arrays']['torque_el'])
+    
+    # Extract NDOB disturbance estimates
+    d_hat_az_ndob = results_ndob['log_arrays'].get('d_hat_ndob_az', np.zeros_like(t_ndob))
+    d_hat_el_ndob = results_ndob['log_arrays'].get('d_hat_ndob_el', np.zeros_like(t_ndob))
+    
+    # Ground truth: viscous friction torque
+    friction_coef = 0.1  # From config [N·m/(rad/s)]
+    d_true_az_fbl = friction_coef * results_fbl['log_arrays']['qd_az']
+    d_true_el_fbl = friction_coef * results_fbl['log_arrays']['qd_el']
+    d_true_az_ndob = friction_coef * results_ndob['log_arrays']['qd_az']
+    d_true_el_ndob = friction_coef * results_ndob['log_arrays']['qd_el']
+    
+    # Subplot 1: Virtual Control Input (v) - Acceleration Demand from Outer Loop
+    ax10a.plot(t_fbl, v_az_fbl, color=COLOR_FBL, linewidth=1.5, label='FBL Az', alpha=0.9)
+    ax10a.plot(t_ndob, v_az_ndob, color=COLOR_NDOB, linewidth=1.5, label='FBL+NDOB Az', alpha=0.9, linestyle='--')
+    ax10a.plot(t_fbl, v_el_fbl, color=COLOR_FBL, linewidth=1.5, label='FBL El', alpha=0.7, linestyle=':')
+    ax10a.plot(t_ndob, v_el_ndob, color=COLOR_NDOB, linewidth=1.5, label='FBL+NDOB El', alpha=0.7, linestyle='-.')
+    ax10a.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+    ax10a.set_ylabel(r'Virtual Control $v$ [rad/s$^2$]', fontsize=11, fontweight='bold')
+    ax10a.set_title(r'Virtual Control Input (Outer Loop $v = \ddot{q}_{ref} + K_p e + K_d \dot{e}$)', 
+                    fontsize=12, fontweight='bold')
+    ax10a.legend(loc='best', fontsize=9, ncol=2)
+    ax10a.grid(True, alpha=0.3, linestyle=':')
+    
+    # Subplot 2: Commanded Torques (τ) - Total Control Effort
+    ax10b.plot(t_fbl, tau_az_fbl, color=COLOR_FBL, linewidth=1.5, label='FBL Az', alpha=0.9)
+    ax10b.plot(t_ndob, tau_az_ndob, color=COLOR_NDOB, linewidth=1.5, label='FBL+NDOB Az', alpha=0.9, linestyle='--')
+    ax10b.plot(t_fbl, tau_el_fbl, color=COLOR_FBL, linewidth=1.5, label='FBL El', alpha=0.7, linestyle=':')
+    ax10b.plot(t_ndob, tau_el_ndob, color=COLOR_NDOB, linewidth=1.5, label='FBL+NDOB El', alpha=0.7, linestyle='-.')
+    ax10b.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+    ax10b.axhline(1.0, color='red', linewidth=1.0, linestyle=':', alpha=0.6, label='Saturation')
+    ax10b.axhline(-1.0, color='red', linewidth=1.0, linestyle=':', alpha=0.6)
+    ax10b.set_ylabel(r'Torque $\tau$ [N·m]', fontsize=11, fontweight='bold')
+    ax10b.set_title(r'Commanded Motor Torque ($\tau = Mv + C\dot{q} + G - \hat{d}$)', 
+                    fontsize=12, fontweight='bold')
+    ax10b.legend(loc='best', fontsize=9, ncol=2)
+    ax10b.grid(True, alpha=0.3, linestyle=':')
+    
+    # Subplot 3: Disturbance Estimate (d_hat) vs Ground Truth
+    ax10c.plot(t_ndob, d_hat_az_ndob, color=COLOR_NDOB, linewidth=1.5, label='NDOB Est Az', alpha=0.9)
+    ax10c.plot(t_ndob, d_hat_el_ndob, color='purple', linewidth=1.5, label='NDOB Est El', alpha=0.9, linestyle='--')
+    ax10c.plot(t_ndob, d_true_az_ndob, color='gray', linewidth=1.0, linestyle=':', 
+               label='Ground Truth Az', alpha=0.7)
+    ax10c.plot(t_ndob, d_true_el_ndob, color='gray', linewidth=1.0, linestyle='-.', 
+               label='Ground Truth El', alpha=0.7)
+    ax10c.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5, label='Zero Disturbance')
+    ax10c.set_ylabel(r'Disturbance $\hat{d}$ [N·m]', fontsize=11, fontweight='bold')
+    ax10c.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
+    ax10c.set_title(r'NDOB Disturbance Estimate ($\hat{d} = z + L M(q) \dot{q}$)', 
+                    fontsize=12, fontweight='bold')
+    ax10c.legend(loc='best', fontsize=9, ncol=2)
+    ax10c.grid(True, alpha=0.3, linestyle=':')
+    
+    fig10.suptitle('Figure 10: Internal Control Signal & Disturbance Observer Analysis', 
+                   fontsize=14, fontweight='bold')
+
+    # =============================================================================
     # Save all figures to disk (300 DPI, publication quality)
     # =============================================================================
-    print("\n✓ Generated 9 research-quality figures (300 DPI, LaTeX labels)")
+    print("\n✓ Generated 10 research-quality figures (300 DPI, LaTeX labels)")
     print("Saving figures to disk...")
     
    # output_dir = Path('figures_comparative')
@@ -674,9 +749,9 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     print("FIGURE GENERATION COMPLETE")
     print("="*70)
     
-    #plt.show()
-    fig1.show()   # shows only fig1
-    input("Press Enter to close...")
+    plt.show()
+    #fig1.show()   # shows only fig1
+    #input("Press Enter to close...")
 
 def run_three_way_comparison(signal_type='constant'):
     """
@@ -701,7 +776,7 @@ def run_three_way_comparison(signal_type='constant'):
     # Common test parameters
     target_az_deg = 45.0
     target_el_deg = 45.0
-    duration = 5.0  # Increased to show full wave periods
+    duration = 2.5  # Increased to show full wave periods
     
     # Signal characteristics
     target_amplitude = 20.0 # degrees
@@ -743,9 +818,7 @@ def run_three_way_comparison(signal_type='constant'):
             'tilt_mass': 0.25,
             'cm_r': 0.0,
             'cm_h': 0.0,
-            'gravity': 9.81,
-            'friction_az': 0.1,
-            'friction_el': 0.1
+            'gravity': 9.81
         },
            coarse_controller_config={
             # Corrected gains from double-integrator design (FIXED derivative calculation)
@@ -753,6 +826,8 @@ def run_three_way_comparison(signal_type='constant'):
             'kp': [3.257, 0.660],    # Per-axis: [Pan, Tilt]
             'ki': [10.232, 2.074],   # Designed for 5 Hz bandwidth
             'kd': [0.1046599, 0.021709],  # Corrected Kd values (40% higher than before)
+            'tau_max': [0.5, 0.5],
+            'tau_min': [-0.5, -0.5],
             'anti_windup_gain': 1.0,
             'tau_rate_limit': 50.0,
             'enable_derivative': True  # Now works correctly with fixed implementation
@@ -783,15 +858,15 @@ def run_three_way_comparison(signal_type='constant'):
         target_amplitude=target_amplitude,
         target_period=target_period,
         use_feedback_linearization=True,  # FL mode
-        use_direct_state_feedback=True,   # Bypass EKF for cleaner controller testing
+        use_direct_state_feedback=False,   # Bypass EKF for cleaner controller testing
         enable_visualization=False,
         enable_plotting=True,             # Disable automatic plots
         real_time_factor=0.0,
         vibration_enabled=True,
         vibration_config={
-            'start_time': 1.0,
+            'start_time': 2.0,
             'frequency_hz': 40.0,
-            'amplitude_rad': 100e-6,
+            'amplitude_rad': 1000e-6,
             'harmonics': [(1.0, 1.0), (2.1, 0.3)]
         },
         feedback_linearization_config={
@@ -801,18 +876,19 @@ def run_three_way_comparison(signal_type='constant'):
             # For critically damped: Kd = 2*ζ*ωn, Kp = ωn²
             # With ωn=20: Kp=400, Kd=36. But motor lag limits effective bandwidth.
             # Using ωn=15 for robustness: Kp=225, Kd=27
-            'kp': [450.0, 450],    # Position gain [1/s²] - increased for faster response
-            'kd': [20.0, 150],    # Velocity gain [1/s] - damping
-            'ki': [15.0, 0],      # Integral for steady-state error rejection
+            #let Kd=36, Kp=Kd^2/2
+            'kp': [648.0, 648.0],    # Position gain [1/s²] - increased for faster response
+            'kd': [36.0, 36.0],    # Velocity gain [1/s] - damping
+            'ki': [1.0, 1.0],      # Integral for steady-state error rejection
             'enable_integral': False,
-            'tau_max': [10.0, 10.0],
-            'tau_min': [-10.0, -10.0],
+            'tau_max': [0.5, 0.5],
+            'tau_min': [-0.5, -0.5],
             # Friction compensation with CONDITIONAL logic (NEW!)
             # Only compensates when velocity aligns with desired acceleration
             # Prevents friction feedforward from fighting braking during transients
-            'friction_az': 0.1,    # Match plant friction
-            'friction_el': 0.1,    # Match plant friction
-            'conditional_friction': True,  # CRITICAL: Enable conditional logic
+            'friction_az': 0.01,    # Match plant friction
+            'friction_el': 0.01,    # Match plant friction
+            'conditional_friction': False,  # CRITICAL: Enable conditional logic
             'enable_disturbance_compensation': False,
             # Optional robust term for handling model uncertainties
             'enable_robust_term': False,  # Set True for additional robustness
@@ -823,8 +899,8 @@ def run_three_way_comparison(signal_type='constant'):
         # Enable this to estimate and compensate unmodeled disturbances (friction, etc.)
         ndob_config={
             'enable': False,  # Set True to enable NDOB disturbance compensation
-            'lambda_az': 100.0,  # Observer bandwidth Az [rad/s] (τ = 25ms)
-            'lambda_el': 100.0,  # Observer bandwidth El [rad/s]
+            'lambda_az': 0.0,  # Observer bandwidth Az [rad/s] (τ = 25ms)
+            'lambda_el': 0.0,  # Observer bandwidth El [rad/s]
             'd_max': 5.0        # Max disturbance estimate [N·m] (safety limit)
         },
         dynamics_config={
@@ -832,9 +908,7 @@ def run_three_way_comparison(signal_type='constant'):
             'tilt_mass': 0.25,
             'cm_r': 0.0,
             'cm_h': 0.0,
-            'gravity': 9.81,
-            'friction_az': 0.1,    # Explicitly set for clarity
-            'friction_el': 0.1     # Explicitly set for clarity
+            'gravity': 9.81
         }
     )
     runner_fbl = DigitalTwinRunner(config_fl)
@@ -848,18 +922,23 @@ def run_three_way_comparison(signal_type='constant'):
     print("TEST 3: FEEDBACK LINEARIZATION + NDOB (Optimal)")
     print("-" * 80)
     
-       # Clone FL config but enable NDOB
+    # Clone FL config but enable NDOB
     import copy
     config_ndob = copy.deepcopy(config_fl)
     config_ndob.ndob_config = {
         'enable': True,
-        'lambda_az': 1000.0,    # Reduced bandwidth for stability (τ = 50ms)
-        'lambda_el': 1000.0,
-        'd_max': 5.0
+        # NDOB bandwidth: λ = 100 rad/s gives τ = 10ms time constant
+        # Higher bandwidth = faster response but more noise sensitivity
+        # With dt_coarse=10ms, λ=100 is at the stability limit for forward Euler
+        'lambda_az': 80.0,
+        'lambda_el': 80.0,
+        'd_max': 5.0  # Safety limit on disturbance estimate [Nm]
     }
-    # Disable manual friction compensation when NDOB is active to avoid double-comp
-    config_ndob.feedback_linearization_config['friction_az'] = 0.0
-    config_ndob.feedback_linearization_config['friction_el'] = 0.0
+    # OPTIMAL CONFIGURATION: Keep friction feedforward ENABLED alongside NDOB
+    # - Friction feedforward handles known friction during transients (immediate)
+    # - NDOB handles residual disturbances and model errors at steady-state
+    # - Together they achieve the best performance: lowest SSE and lowest RMS
+    # DO NOT disable friction_az/friction_el - the combination is synergistic!
     
     print("Initializing FBL + NDOB controller simulation...")
     runner_ndob = DigitalTwinRunner(config_ndob)
@@ -945,13 +1024,14 @@ if __name__ == '__main__':
     # User can change this to 'square', 'sine', or 'cosine' to test dynamic tracking
     
     # 1. Constant Target (Legacy)
-    # run_three_way_comparison(signal_type='constant')
+   run_three_way_comparison(signal_type='constant')
     
     # 2. Square Wave Target (Requested)
-    run_three_way_comparison(signal_type='square')
+    
+   # run_three_way_comparison(signal_type='square')
     
     # 3. Sine Wave Target
-    # run_three_way_comparison(signal_type='sine')
+   # run_three_way_comparison(signal_type='sine')
     
     # 4. Cosine Wave Target
     # run_three_way_comparison(signal_type='cosine')

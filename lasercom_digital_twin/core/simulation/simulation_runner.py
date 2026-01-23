@@ -588,6 +588,10 @@ class DigitalTwinRunner:
             # NDOB disturbance estimates
             'd_hat_ndob_az', 'd_hat_ndob_el',
             'ndob_velocity_clipped',
+            # Virtual control signal (FBL outer loop)
+            'v_virtual_az', 'v_virtual_el',
+            # Unsaturated torque command (before actuator limits)
+            'tau_unsaturated_az', 'tau_unsaturated_el',
             # Coarse-loop diagnostics (available for PID; best-effort for FL)
             'coarse_tau_cmd_az', 'coarse_tau_cmd_el',
             'coarse_v_cmd_az', 'coarse_v_cmd_el',
@@ -1187,6 +1191,16 @@ class DigitalTwinRunner:
             
             # NDOB velocity clipping status (for diagnostics)
             self.log_data['ndob_velocity_clipped'].append(bool(self.state.ndob_velocity_clipped))
+            
+            # Virtual control signal v (outer loop commanded acceleration)
+            v_sig = self.last_coarse_meta.get('v_signal', np.zeros(2))
+            self.log_data['v_virtual_az'].append(float(v_sig[0]))
+            self.log_data['v_virtual_el'].append(float(v_sig[1]))
+            
+            # Unsaturated torque (total commanded torque before actuator limits)
+            tau_unsat = self.last_coarse_meta.get('tau_unsaturated', np.zeros(2))
+            self.log_data['tau_unsaturated_az'].append(float(tau_unsat[0]))
+            self.log_data['tau_unsaturated_el'].append(float(tau_unsat[1]))
             
             self.last_log_time = self.time
     
