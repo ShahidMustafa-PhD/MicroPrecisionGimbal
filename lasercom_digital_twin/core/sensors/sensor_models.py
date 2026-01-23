@@ -160,17 +160,30 @@ class AbsoluteEncoder(SensorModel):
         float
             Quantized value [rad]
         """
-        # Normalize to range
-        normalized = (value - self.range_min) / (self.range_max - self.range_min)
+        # Wrap angle to [range_min, range_max] to handle negative angles
+        # This simulates a multi-turn absolute encoder
+        range_span = self.range_max - self.range_min
+        wrapped_value = self.range_min + ((value - self.range_min) % range_span)
+        
+        # Normalize to range [0, 1]
+        normalized = (wrapped_value - self.range_min) / range_span
         
         # Quantize to integer levels
         levels = int(normalized * (2**self.resolution_bits))
         levels = np.clip(levels, 0, 2**self.resolution_bits - 1)
         
         # Convert back to physical units
+        # But we want to return the wrapped angle, not the original domain
         quantized = self.range_min + levels * self.q_step
         
-        return quantized
+        # Now unwrap to match the original value's sign/magnitude
+        # Count how many full rotations the original value had
+        n_wraps = int((value - self.range_min) // range_span)
+        
+        # Add back the wraps to get the final quantized value in original domain
+        quantized_final = quantized + n_wraps * range_span
+        
+        return quantized_final
     
     def update(self, dt: float) -> None:
         """
