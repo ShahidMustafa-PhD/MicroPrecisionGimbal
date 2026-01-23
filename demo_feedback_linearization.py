@@ -776,7 +776,7 @@ def run_three_way_comparison(signal_type='constant'):
     # Common test parameters
     target_az_deg = 45.0
     target_el_deg = 45.0
-    duration = 2.5  # Increased to show full wave periods
+    duration = 5 # Increased to show full wave periods
     
     # Signal characteristics
     target_amplitude = 20.0 # degrees
@@ -858,11 +858,11 @@ def run_three_way_comparison(signal_type='constant'):
         target_amplitude=target_amplitude,
         target_period=target_period,
         use_feedback_linearization=True,  # FL mode
-        use_direct_state_feedback=False,   # Bypass EKF for cleaner controller testing
+        use_direct_state_feedback=True,   # Bypass EKF for cleaner controller testing
         enable_visualization=False,
         enable_plotting=True,             # Disable automatic plots
         real_time_factor=0.0,
-        vibration_enabled=True,
+        vibration_enabled=False,
         vibration_config={
             'start_time': 2.0,
             'frequency_hz': 40.0,
@@ -877,8 +877,8 @@ def run_three_way_comparison(signal_type='constant'):
             # With ωn=20: Kp=400, Kd=36. But motor lag limits effective bandwidth.
             # Using ωn=15 for robustness: Kp=225, Kd=27
             #let Kd=36, Kp=Kd^2/2
-            'kp': [648.0, 648.0],    # Position gain [1/s²] - increased for faster response
-            'kd': [36.0, 36.0],    # Velocity gain [1/s] - damping
+            'kp': [1025.0, 1025.0],    # Position gain [1/s²] - increased for faster response
+            'kd': [64.0, 64.0],    # Velocity gain [1/s] - damping
             'ki': [1.0, 1.0],      # Integral for steady-state error rejection
             'enable_integral': False,
             'tau_max': [0.5, 0.5],
@@ -886,8 +886,8 @@ def run_three_way_comparison(signal_type='constant'):
             # Friction compensation with CONDITIONAL logic (NEW!)
             # Only compensates when velocity aligns with desired acceleration
             # Prevents friction feedforward from fighting braking during transients
-            'friction_az': 0.01,    # Match plant friction
-            'friction_el': 0.01,    # Match plant friction
+            'friction_az': 0,    # Match plant friction
+            'friction_el': 0,    # Match plant friction
             'conditional_friction': False,  # CRITICAL: Enable conditional logic
             'enable_disturbance_compensation': False,
             # Optional robust term for handling model uncertainties
@@ -1024,11 +1024,11 @@ if __name__ == '__main__':
     # User can change this to 'square', 'sine', or 'cosine' to test dynamic tracking
     
     # 1. Constant Target (Legacy)
-   run_three_way_comparison(signal_type='constant')
+   #run_three_way_comparison(signal_type='constant')
     
     # 2. Square Wave Target (Requested)
     
-   # run_three_way_comparison(signal_type='square')
+    run_three_way_comparison(signal_type='square')
     
     # 3. Sine Wave Target
    # run_three_way_comparison(signal_type='sine')
