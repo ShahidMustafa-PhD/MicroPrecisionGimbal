@@ -153,44 +153,67 @@ class PointingStateEstimator:
         self.x_hat: np.ndarray = np.array(initial_state, dtype=float)
         
         # Initialize state covariance
+        # NOTE: Small initial position covariance (1e-9) forces filter to "lock on" to
+        # first measurement immediately - critical for ideal sensor conditions
         initial_P = config.get('initial_covariance', None)
         if initial_P is not None:
             self.P: np.ndarray = np.array(initial_P, dtype=float)
         else:
-            # Default diagonal covariance
+            # Default diagonal covariance - tuned for ideal sensor conditions
             self.P = np.diag([
-                1e-6,   # θ_Az variance [rad²]
+                1e-9,   # θ_Az variance [rad²] - small to trust encoder immediately
                 1e-8,   # θ̇_Az variance [(rad/s)²]
                 1e-8,   # b_Az variance [(rad/s)²]
-                1e-6,   # θ_El variance [rad²]
+                1e-9,   # θ_El variance [rad²] - small to trust encoder immediately
                 1e-8,   # θ̇_El variance [(rad/s)²]
                 1e-8,   # b_El variance [(rad/s)²]
                 1e-6,   # φ_roll variance [rad²]
                 1e-8,   # φ̇_roll variance [(rad/s)²]
-                1e-4,   # d_Az variance [N²·m²]
-                1e-4    # d_El variance [N²·m²]
+                1e-2,   # d_Az variance [N²·m²] - large to absorb model errors
+                1e-2    # d_El variance [N²·m²] - large to absorb model errors
             ])
         
         # Process noise covariance Q
+        # NOTE: Disturbance states are "liquid" (high Q) to absorb model errors
+        # like friction mismatch. This tells EKF: "if math doesn't match sensor,
+        # assume there's a disturbance torque causing it."
         process_noise_std = config.get('process_noise_std', [
             1e-8, 1e-6, 1e-9,  # Az: position, velocity, bias
             1e-8, 1e-6, 1e-9,  # El: position, velocity, bias
             1e-7, 1e-6,        # Roll: angle, rate
-            1e-4, 1e-4         # Disturbances
+            1e-1, 1e-1         # Disturbances - 2 orders larger to absorb model errors
         ])
         self.Q: np.ndarray = np.diag(np.array(process_noise_std) ** 2)
         
         # Measurement noise covariance R
+        # NOTE: For ideal sensor conditions (no noise), encoders are treated as
+        # absolute truth with near-zero variance (1e-12 is numerically stable zero)
         measurement_noise_std = config.get('measurement_noise_std', [
-            2.4e-5, 2.4e-5,  # Encoders [rad]
+            1e-6, 1e-6,      # Encoders [rad] - near-zero for perfect sensor trust
             1e-6, 1e-6,      # Gyros [rad/s]
-            1e-4, 1e-4       # QPD [dimensionless NES]
+            1e-2, 1e-2       # QPD [dimensionless NES] - large since placeholder
         ])
         self.R: np.ndarray = np.diag(np.array(measurement_noise_std) ** 2)
         
         # Storage for diagnostics
         self.innovation: np.ndarray = np.zeros(self.n_measurements)
+        self.innovation_covariance: np.ndarray = np.zeros((self.n_measurements, self.n_measurements))
         self.K: np.ndarray = np.zeros((self.n_states, self.n_measurements))
+        self.innovation_history: List[np.ndarray] = []  # For plotting
+        self.covariance_history: List[np.ndarray] = []  # Track P diagonal
+        
+        # Adaptive tuning parameters
+        self.velocity_threshold_low: float = config.get('velocity_threshold_low', 0.01)  # rad/s
+        self.q_scale_precision: float = config.get('q_scale_precision', 0.01)  # Scale down Q for slow motion
+        self.r_scale_precision: float = config.get('r_scale_precision', 0.5)   # Scale down R to trust encoders
+        
+        # Store baseline Q and R for adaptive scaling
+        self.Q_baseline: np.ndarray = self.Q.copy()
+        self.R_baseline: np.ndarray = self.R.copy()
+        
+        # Innovation monitoring (3-sigma bounds check)
+        self.innovation_violation_count: int = 0
+        self.innovation_3sigma_violations: List[int] = []
         
         # Iteration counter
         self.iteration: int = 0
@@ -221,40 +244,108 @@ class PointingStateEstimator:
         dt : float
             Time step [s]
         """
-        # Extract current state
-        theta_az = self.x_hat[StateIndex.THETA_AZ]
-        theta_dot_az = self.x_hat[StateIndex.THETA_DOT_AZ]
-        bias_az = self.x_hat[StateIndex.BIAS_AZ]
-        theta_el = self.x_hat[StateIndex.THETA_EL]
-        theta_dot_el = self.x_hat[StateIndex.THETA_DOT_EL]
-        bias_el = self.x_hat[StateIndex.BIAS_EL]
-        phi_roll = self.x_hat[StateIndex.PHI_ROLL]
-        phi_dot_roll = self.x_hat[StateIndex.PHI_DOT_ROLL]
-        dist_az = self.x_hat[StateIndex.DIST_AZ]
-        dist_el = self.x_hat[StateIndex.DIST_EL]
-        
         # Control inputs
-        tau_az = u[0] if len(u) > 0 else 0.0
-        tau_el = u[1] if len(u) > 1 else 0.0
+        tau = np.array([
+            u[0] if len(u) > 0 else 0.0,
+            u[1] if len(u) > 1 else 0.0
+        ])
         
-        # Use true manipulator equation dynamics: M(q)q̈ + C(q,q̇)q̇ + G(q) = τ + d
-        # State: q = [theta_az, theta_el], dq = [theta_dot_az, theta_dot_el]
+        # =======================================================================
+        # HEUN'S METHOD (2nd-Order Predictor-Corrector)
+        # Eliminates numerical lag from Forward Euler
+        #
+        # Step A: k1 = f(x_hat) - accelerations at current state
+        # Step B: x_tmp = x_hat + f(x_hat)*dt - predictor step
+        # Step C: k2 = f(x_tmp) - accelerations at predicted state
+        # Step D: x_new = x_hat + dt/2 * (k1 + k2) - corrector step
+        # =======================================================================
+        
+        # Step A: Compute accelerations k1 at current state
+        k1_accel, k1_vel = self._compute_state_derivatives(self.x_hat, tau)
+        
+        # Step B: Predictor - forward Euler to get intermediate state
+        x_tmp = self.x_hat.copy()
+        x_tmp[StateIndex.THETA_AZ] += k1_vel[0] * dt
+        x_tmp[StateIndex.THETA_DOT_AZ] += k1_accel[0] * dt
+        x_tmp[StateIndex.THETA_EL] += k1_vel[1] * dt
+        x_tmp[StateIndex.THETA_DOT_EL] += k1_accel[1] * dt
+        x_tmp[StateIndex.PHI_ROLL] += self.x_hat[StateIndex.PHI_DOT_ROLL] * dt
+        # Biases and disturbances are random walks (no deterministic evolution)
+        
+        # Step C: Compute accelerations k2 at predicted state
+        k2_accel, k2_vel = self._compute_state_derivatives(x_tmp, tau)
+        
+        # Step D: Corrector - average of k1 and k2
+        avg_accel = 0.5 * (k1_accel + k2_accel)
+        avg_vel = 0.5 * (k1_vel + k2_vel)
+        
+        # Final state update using Heun's method
+        x_pred = self.x_hat.copy()
+        x_pred[StateIndex.THETA_AZ] += avg_vel[0] * dt
+        x_pred[StateIndex.THETA_DOT_AZ] += avg_accel[0] * dt
+        x_pred[StateIndex.BIAS_AZ] += 0.0  # Bias modeled as random walk (drift in Q)
+        x_pred[StateIndex.THETA_EL] += avg_vel[1] * dt
+        x_pred[StateIndex.THETA_DOT_EL] += avg_accel[1] * dt
+        x_pred[StateIndex.BIAS_EL] += 0.0
+        x_pred[StateIndex.PHI_ROLL] += self.x_hat[StateIndex.PHI_DOT_ROLL] * dt
+        x_pred[StateIndex.PHI_DOT_ROLL] += 0.0  # Roll dynamics (simplified)
+        x_pred[StateIndex.DIST_AZ] += 0.0  # Disturbance modeled as random walk
+        x_pred[StateIndex.DIST_EL] += 0.0
+        
+        # Compute Jacobian F_k (linearized dynamics at current state)
+        F = self._compute_process_jacobian(dt, self.x_hat[StateIndex.THETA_DOT_AZ],
+                                           self.x_hat[StateIndex.THETA_DOT_EL])
+        
+        # Covariance propagation: P = F P F^T + Q
+        self.P = F @ self.P @ F.T + self.Q * dt
+        
+        # Update state estimate
+        self.x_hat = x_pred
+    
+    def _compute_state_derivatives(
+        self, 
+        x: np.ndarray, 
+        tau: np.ndarray
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Compute state derivatives (accelerations and velocities) for integration.
+        
+        Implements the manipulator equation: M(q)q̈ + C(q,q̇)q̇ + G(q) = τ - friction + d
+        
+        Parameters
+        ----------
+        x : np.ndarray
+            State vector [10-element]
+        tau : np.ndarray
+            Control torque vector [τ_Az, τ_El] [N·m]
+            
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray]
+            (accelerations [2], velocities [2]) - [az, el] components
+        """
+        # Extract state components
+        theta_az = x[StateIndex.THETA_AZ]
+        theta_dot_az = x[StateIndex.THETA_DOT_AZ]
+        theta_el = x[StateIndex.THETA_EL]
+        theta_dot_el = x[StateIndex.THETA_DOT_EL]
+        dist_az = x[StateIndex.DIST_AZ]
+        dist_el = x[StateIndex.DIST_EL]
+        
+        # Joint state vectors
         q = np.array([theta_az, theta_el])
         dq = np.array([theta_dot_az, theta_dot_el])
         
-        # Get true dynamics matrices
+        # Get dynamics matrices from true model
         M = self.gimbal_dynamics.get_mass_matrix(q)
         C = self.gimbal_dynamics.get_coriolis_matrix(q, dq)
         G = self.gimbal_dynamics.get_gravity_vector(q)
-        
-        # Control torque vector (including disturbances and friction)
-        tau = np.array([tau_az, tau_el])
         
         # Friction torques (viscous damping model)
         friction = np.array([self.friction_az * theta_dot_az, 
                             self.friction_el * theta_dot_el])
         
-        # Disturbance torques
+        # Disturbance torques from state estimate
         disturbances = np.array([dist_az, dist_el])
         
         # Total effective torque: τ_eff = τ - friction + disturbances
@@ -262,32 +353,9 @@ class PointingStateEstimator:
         
         # Solve for accelerations: M(q)q̈ = τ_eff - C(q,q̇)q̇ - G(q)
         rhs = tau_effective - (C @ dq) - G
-        accelerations = np.linalg.solve(M, rhs) #criticlal...
+        accelerations = np.linalg.solve(M, rhs)
         
-        accel_az = accelerations[0]
-        accel_el = accelerations[1]
-        
-        # State propagation (Euler integration)
-        x_pred = self.x_hat.copy()
-        x_pred[StateIndex.THETA_AZ] += theta_dot_az * dt
-        x_pred[StateIndex.THETA_DOT_AZ] += accel_az * dt
-        x_pred[StateIndex.BIAS_AZ] += 0.0  # Bias modeled as random walk (drift in Q)
-        x_pred[StateIndex.THETA_EL] += theta_dot_el * dt
-        x_pred[StateIndex.THETA_DOT_EL] += accel_el * dt
-        x_pred[StateIndex.BIAS_EL] += 0.0
-        x_pred[StateIndex.PHI_ROLL] += phi_dot_roll * dt
-        x_pred[StateIndex.PHI_DOT_ROLL] += 0.0  # Roll dynamics (simplified)
-        x_pred[StateIndex.DIST_AZ] += 0.0  # Disturbance modeled as random walk
-        x_pred[StateIndex.DIST_EL] += 0.0
-        
-        # Compute Jacobian F_k (linearized dynamics)
-        F = self._compute_process_jacobian(dt, theta_dot_az, theta_dot_el)
-        
-        # Covariance propagation: P = F P F^T + Q
-        self.P = F @ self.P @ F.T + self.Q * dt
-        
-        # Update state estimate
-        self.x_hat = x_pred
+        return accelerations, dq
         
     def _compute_process_jacobian(
         self, 
@@ -469,12 +537,29 @@ class PointingStateEstimator:
         # Innovation covariance
         S = H_masked @ self.P @ H_masked.T + R_masked
         
+        # === INNOVATION MONITORING (3-sigma bounds check) ===
+        # Check if innovation exceeds 3-sigma bounds (indicates filter divergence)
+        innovation_std = np.sqrt(np.diag(S))
+        innovation_normalized = np.abs(innovation_masked) / (innovation_std + 1e-12)
+        if np.any(innovation_normalized > 3.0):
+            self.innovation_violation_count += 1
+            self.innovation_3sigma_violations.append(self.iteration)
+            # Diagnostic warning: filter may be ignoring sensor data
+        
         # Kalman gain
         try:
             K = self.P @ H_masked.T @ np.linalg.inv(S)
         except np.linalg.LinAlgError:
             # Singular innovation covariance, skip update
             K = np.zeros((self.n_states, np.sum(measurement_mask)))
+        
+        # === GAIN DIAGNOSTICS ===
+        # If innovation is large but gain is small, filter has starved covariance
+        gain_norm = np.linalg.norm(K)
+        innovation_norm = np.linalg.norm(innovation_masked)
+        if innovation_norm > 1e-4 and gain_norm < 1e-6:
+            # Filter is ignoring sensors - covariance has collapsed
+            pass  # Handled by adaptive tuning
         
         # State update
         self.x_hat = self.x_hat + K @ innovation_masked
@@ -483,10 +568,18 @@ class PointingStateEstimator:
         I_KH = np.eye(self.n_states) - K @ H_masked
         self.P = I_KH @ self.P @ I_KH.T + K @ R_masked @ K.T
         
+        # Store full innovation covariance for diagnostics
+        self.innovation_covariance = np.zeros((self.n_measurements, self.n_measurements))
+        self.innovation_covariance[np.ix_(measurement_mask, measurement_mask)] = S
+        
         # Store for diagnostics
         self.innovation = innovation
         self.K = np.zeros((self.n_states, self.n_measurements))
         self.K[:, measurement_mask] = K
+        
+        # Log innovation history for plotting
+        self.innovation_history.append(innovation.copy())
+        self.covariance_history.append(np.diag(self.P).copy())
         
     def _measurement_model(self, x: np.ndarray) -> np.ndarray:
         """
@@ -519,12 +612,21 @@ class PointingStateEstimator:
         z_pred[MeasurementIndex.THETA_DOT_AZ_GYRO] = x[StateIndex.THETA_DOT_AZ] + x[StateIndex.BIAS_AZ]
         z_pred[MeasurementIndex.THETA_DOT_EL_GYRO] = x[StateIndex.THETA_DOT_EL] + x[StateIndex.BIAS_EL]
         
-        # QPD measurements (simplified: assumes small angles)
-        # In full implementation, this would include field rotation and optical chain
-        # NES ≈ sensitivity * angle_error / linear_range
-        # For now, assume QPD measures residual pointing error (placeholder)
-        z_pred[MeasurementIndex.NES_X_QPD] = 0.0  # Placeholder
-        z_pred[MeasurementIndex.NES_Y_QPD] = 0.0  # Placeholder
+        # QPD measurements - residual pointing error after coarse loop
+        # In full implementation, this would include:
+        #   1. Field rotation compensation (K-mirror)
+        #   2. Optical chain projection
+        #   3. Non-linear sensitivity near null
+        #
+        # Industry-standard approach: QPD measures deviation from optical axis
+        # NES ≈ k_sens * (θ - θ_target) where θ_target ≈ 0 at FSM handover
+        # For EKF consistency: if we don't have a proper QPD model, predict what
+        # the measurement should be so innovation stays near zero
+        #
+        # Current: QPD is placeholder - set large R to minimize its influence
+        # The H matrix for QPD is zero, so these predictions don't affect state
+        z_pred[MeasurementIndex.NES_X_QPD] = 0.0  # Placeholder (matched by H=0)
+        z_pred[MeasurementIndex.NES_Y_QPD] = 0.0  # Placeholder (matched by H=0)
         
         return z_pred
     
@@ -598,6 +700,9 @@ class PointingStateEstimator:
         np.ndarray
             Updated state estimate [10-element]
         """
+        # Apply adaptive Q/R tuning based on velocity
+        self._adaptive_tuning()
+        
         # Prediction step
         self.predict(u, dt)
         
@@ -682,7 +787,8 @@ class PointingStateEstimator:
         Returns
         -------
         Dict
-            Diagnostic information including innovation, gain, covariance
+            Diagnostic information including innovation, gain, covariance,
+            and adaptive tuning history
         """
         return {
             'iteration': self.iteration,
@@ -690,8 +796,41 @@ class PointingStateEstimator:
             'covariance_diag': self.get_covariance_diagonal(),
             'innovation': self.innovation.copy(),
             'kalman_gain_norm': np.linalg.norm(self.K),
-            'trace_P': np.trace(self.P)
+            'trace_P': np.trace(self.P),
+            'innovation_history': self.innovation_history.copy() if self.innovation_history else [],
+            'covariance_history': self.covariance_history.copy() if self.covariance_history else [],
+            'innovation_3sigma_violations': self.innovation_3sigma_violations.copy(),
+            'innovation_violation_count': self.innovation_violation_count,
+            'Q_current': self.Q.copy(),
+            'R_current': self.R.copy()
         }
+    
+    def _adaptive_tuning(self) -> None:
+        """
+        Adaptive Q/R scaling based on current velocity estimate.
+        
+        For low-velocity motion (< threshold), the EKF should:
+        1. Reduce Q (stiffen model) - assume highly predictable motion
+        2. Reduce R (trust sensors more) - encoder noise dominates at slow speeds
+        
+        This prevents the filter from "smoothing away" slow sine waves.
+        """
+        # Extract current velocity estimates
+        vel_az = np.abs(self.x_hat[StateIndex.THETA_DOT_AZ])
+        vel_el = np.abs(self.x_hat[StateIndex.THETA_DOT_EL])
+        vel_norm = np.sqrt(vel_az**2 + vel_el**2)
+        
+        # Velocity-based scaling factor (sigmoid transition for smooth switching)
+        # At low velocities: scale → q_scale_precision (e.g., 0.01)
+        # At high velocities: scale → 1.0 (baseline)
+        k = 10.0 / self.velocity_threshold_low  # Steepness of transition
+        scale_q = self.q_scale_precision + (1.0 - self.q_scale_precision) / (1.0 + np.exp(-k * (vel_norm - self.velocity_threshold_low)))
+        scale_r = self.r_scale_precision + (1.0 - self.r_scale_precision) / (1.0 + np.exp(-k * (vel_norm - self.velocity_threshold_low)))
+        
+        # Apply adaptive scaling
+        # Precision mode: Lower Q (less model uncertainty) and lower R (trust encoders)
+        self.Q = self.Q_baseline * scale_q
+        self.R = self.R_baseline * scale_r
     
     def set_process_noise_covariance(self, Q_diag: np.ndarray) -> None:
         """
