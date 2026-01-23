@@ -725,23 +725,96 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
                    fontsize=14, fontweight='bold')
 
     # =============================================================================
+    # FIGURE 11: EKF Diagnostics (Innovation & Covariance History)
+    # =============================================================================
+    fig11, (ax11a, ax11b, ax11c) = plt.subplots(3, 1, figsize=(10, 9), sharex=True)
+    
+    # Get EKF diagnostics from FBL+NDOB simulation (most representative)
+    log_arrays_fbl = results_ndob['log_arrays']
+    t_fbl_ekf = log_arrays_fbl['time']
+    
+    # Subplot 11a: State Covariance (Position, Velocity, Bias for Az/El)
+    if 'ekf_cov_theta_az' in log_arrays_fbl:
+        ax11a.semilogy(t_fbl_ekf, log_arrays_fbl['ekf_cov_theta_az'], 'b-', linewidth=1.5, label=r'$P_{\theta_{Az}}$')
+        ax11a.semilogy(t_fbl_ekf, log_arrays_fbl['ekf_cov_theta_dot_az'], 'r-', linewidth=1.5, label=r'$P_{\dot{\theta}_{Az}}$')
+        ax11a.semilogy(t_fbl_ekf, log_arrays_fbl['ekf_cov_bias_az'], 'g-', linewidth=1.5, label=r'$P_{b_{Az}}$')
+        ax11a.set_ylabel('Covariance Diagonal', fontsize=12, fontweight='bold')
+        ax11a.set_title('(a) EKF State Covariance Evolution (Log Scale)', fontsize=12, fontweight='bold')
+        ax11a.legend(loc='best', fontsize=9, ncol=3)
+        ax11a.grid(True, alpha=0.3, linestyle=':')
+    else:
+        # Placeholder when diagnostics not yet logged
+        ax11a.text(0.5, 0.5, 'EKF Covariance Logging Not Yet Implemented\n(Requires simulation_runner enhancement)',
+                   ha='center', va='center', transform=ax11a.transAxes, fontsize=10)
+        ax11a.set_ylabel('Covariance', fontsize=12)
+        ax11a.set_title('(a) EKF State Covariance Evolution', fontsize=12, fontweight='bold')
+    
+    # Subplot 11b: Innovation Residuals (Encoder Az/El)
+    if 'ekf_innovation_enc_az' in log_arrays_fbl:
+        ax11b.plot(t_fbl_ekf, np.rad2deg(log_arrays_fbl['ekf_innovation_enc_az']), 'b-', 
+                   linewidth=1.2, label='Encoder Az Innovation')
+        ax11b.plot(t_fbl_ekf, np.rad2deg(log_arrays_fbl['ekf_innovation_enc_el']), 'r-', 
+                   linewidth=1.2, label='Encoder El Innovation')
+        ax11b.axhline(0, color='k', linestyle='--', linewidth=1, alpha=0.5)
+        ax11b.set_ylabel('Innovation [deg]', fontsize=12, fontweight='bold')
+        ax11b.set_title('(b) Measurement Innovation (Encoder Residuals)', fontsize=12, fontweight='bold')
+        ax11b.legend(loc='best', fontsize=9)
+        ax11b.grid(True, alpha=0.3, linestyle=':')
+    else:
+        ax11b.text(0.5, 0.5, 'Innovation Logging Not Yet Implemented',
+                   ha='center', va='center', transform=ax11b.transAxes, fontsize=10)
+        ax11b.set_ylabel('Innovation [deg]', fontsize=12)
+        ax11b.set_title('(b) Measurement Innovation', fontsize=12, fontweight='bold')
+    
+    # Subplot 11c: 3-Sigma Bounds & Violations
+    if 'ekf_innovation_3sigma_az' in log_arrays_fbl:
+        ax11c.plot(t_fbl_ekf, np.rad2deg(log_arrays_fbl['ekf_innovation_enc_az']), 'b-', 
+                   linewidth=1.2, label='Innovation Az')
+        ax11c.plot(t_fbl_ekf, np.rad2deg(log_arrays_fbl['ekf_innovation_3sigma_az']), 'r--', 
+                   linewidth=1.5, label=r'$+3\sigma$ Bound')
+        ax11c.plot(t_fbl_ekf, -np.rad2deg(log_arrays_fbl['ekf_innovation_3sigma_az']), 'r--', 
+                   linewidth=1.5, label=r'$-3\sigma$ Bound')
+        
+        # Mark violations
+        violations = np.where(np.abs(log_arrays_fbl['ekf_innovation_enc_az']) > 
+                              log_arrays_fbl['ekf_innovation_3sigma_az'])[0]
+        if len(violations) > 0:
+            ax11c.scatter(t_fbl_ekf[violations], np.rad2deg(log_arrays_fbl['ekf_innovation_enc_az'][violations]),
+                         color='red', marker='x', s=100, linewidths=2, label='3σ Violation', zorder=10)
+        
+        ax11c.set_xlabel('Time [s]', fontsize=12, fontweight='bold')
+        ax11c.set_ylabel('Innovation [deg]', fontsize=12, fontweight='bold')
+        ax11c.set_title('(c) Innovation Bounds & Consistency Check', fontsize=12, fontweight='bold')
+        ax11c.legend(loc='best', fontsize=9)
+        ax11c.grid(True, alpha=0.3, linestyle=':')
+    else:
+        ax11c.text(0.5, 0.5, '3-Sigma Bounds Logging Not Yet Implemented',
+                   ha='center', va='center', transform=ax11c.transAxes, fontsize=10)
+        ax11c.set_xlabel('Time [s]', fontsize=12)
+        ax11c.set_ylabel('Innovation [deg]', fontsize=12)
+        ax11c.set_title('(c) Innovation Consistency Check', fontsize=12, fontweight='bold')
+    
+    fig11.suptitle('Figure 11: Extended Kalman Filter Diagnostics & Adaptive Tuning', 
+                   fontsize=14, fontweight='bold')
+
+    # =============================================================================
     # Save all figures to disk (300 DPI, publication quality)
     # =============================================================================
-    print("\n✓ Generated 10 research-quality figures (300 DPI, LaTeX labels)")
+    print("\n✓ Generated 11 research-quality figures (300 DPI, LaTeX labels)")
     print("Saving figures to disk...")
     
-   # output_dir = Path('figures_comparative')
-   # output_dir.mkdir(exist_ok=True)
+    output_dir = Path('figures_comparative')
+    output_dir.mkdir(exist_ok=True)
     
-   # fig1.savefig(output_dir / 'fig1_position_tracking.png', dpi=300, bbox_inches='tight')
-    #fig2.savefig(output_dir / 'fig2_tracking_error_handover.png', dpi=300, bbox_inches='tight')
-    #fig3.savefig(output_dir / 'fig3_torque_ndob.png', dpi=300, bbox_inches='tight')
-    #fig4.savefig(output_dir / 'fig4_velocities.png', dpi=300, bbox_inches='tight')
-    #fig5.savefig(output_dir / 'fig5_phase_plane.png', dpi=300, bbox_inches='tight')
-   #fig6.savefig(output_dir / 'fig6_los_errors.png', dpi=300, bbox_inches='tight')
-   # fig7.savefig(output_dir / 'fig7_performance_summary.png', dpi=300, bbox_inches='tight')
-    #fig8.savefig(output_dir / 'fig8_state_estimates.png', dpi=300, bbox_inches='tight')
-    #fig9.savefig(output_dir / 'fig9_fsm_performance.png', dpi=300, bbox_inches='tight')
+    fig1.savefig(output_dir / 'fig1_position_tracking.png', dpi=300, bbox_inches='tight')
+    fig2.savefig(output_dir / 'fig2_tracking_error_handover.png', dpi=300, bbox_inches='tight')
+    fig3.savefig(output_dir / 'fig3_torque_ndob.png', dpi=300, bbox_inches='tight')
+    fig4.savefig(output_dir / 'fig4_velocities.png', dpi=300, bbox_inches='tight')
+    fig5.savefig(output_dir / 'fig5_phase_plane.png', dpi=300, bbox_inches='tight')
+    fig6.savefig(output_dir / 'fig6_los_errors.png', dpi=300, bbox_inches='tight')
+    fig7.savefig(output_dir / 'fig7_performance_summary.png', dpi=300, bbox_inches='tight')
+    fig8.savefig(output_dir / 'fig8_state_estimates.png', dpi=300, bbox_inches='tight')
+    fig9.savefig(output_dir / 'fig9_fsm_performance.png', dpi=300, bbox_inches='tight')
     
    # print(f"  ✓ Saved 9 figures to {output_dir.absolute()}/")
     #print("  ✓ Format: PNG, 300 DPI, bbox='tight' (publication-ready)")
@@ -774,13 +847,13 @@ def run_three_way_comparison(signal_type='constant'):
     print("=" * 80 + "\n")
     
     # Common test parameters
-    target_az_deg = 45.0
-    target_el_deg = 45.0
-    duration = 5 # Increased to show full wave periods
+    target_az_deg = 0
+    target_el_deg = 0
+    duration = 10.0  # Increased to show full wave periods
     
     # Signal characteristics
     target_amplitude = 20.0 # degrees
-    target_period = 2.0    # seconds
+    target_period = 5   # seconds
     
     print(f"Test Conditions:")
     print(f"  - Target Base: Az={target_az_deg:.1f}°, El={target_el_deg:.1f}°")
@@ -801,8 +874,8 @@ def run_three_way_comparison(signal_type='constant'):
     print("-" * 80)
     
     config_pid = SimulationConfig(
-        dt_sim=0.001,
-        dt_coarse=0.010,
+        dt_sim=0.01,
+        dt_coarse=0.0010,
         dt_fine=0.001,
         log_period=0.001,
         seed=42,
@@ -846,8 +919,8 @@ def run_three_way_comparison(signal_type='constant'):
     print("-" * 80)
     
     config_fl = SimulationConfig(
-        dt_sim=0.001,
-        dt_coarse=0.010,
+        dt_sim=0.01,
+        dt_coarse=0.0010,
         dt_fine=0.001,
         log_period=0.001,
         seed=42,
@@ -858,7 +931,7 @@ def run_three_way_comparison(signal_type='constant'):
         target_amplitude=target_amplitude,
         target_period=target_period,
         use_feedback_linearization=True,  # FL mode
-        use_direct_state_feedback=True,   # Bypass EKF for cleaner controller testing
+        use_direct_state_feedback=False,   # Bypass EKF for cleaner controller testing
         enable_visualization=False,
         enable_plotting=True,             # Disable automatic plots
         real_time_factor=0.0,
@@ -1028,10 +1101,10 @@ if __name__ == '__main__':
     
     # 2. Square Wave Target (Requested)
     
-    run_three_way_comparison(signal_type='square')
+    #run_three_way_comparison(signal_type='square')
     
     # 3. Sine Wave Target
-   # run_three_way_comparison(signal_type='sine')
+    run_three_way_comparison(signal_type='sine')
     
     # 4. Cosine Wave Target
     # run_three_way_comparison(signal_type='cosine')
