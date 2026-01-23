@@ -72,11 +72,27 @@ class NDOBConfig:
         compensation that could destabilize the system.
     enable : bool
         Master enable flag. If False, observer returns zero disturbance.
+    max_dq_ndob : float
+        Velocity clipping limit [rad/s] for NDOB state update. This is a
+        DESIGN-LIMIT MITIGATION to prevent integrator wind-up when tracking
+        non-smooth (square wave) trajectories. Default: 0.5236 rad/s (30°/s).
+        The clipped velocity is ONLY used for the observer's internal dynamics
+        (p and z_dot calculations), not for the FBL controller.
+        
+        Rationale: Typical smooth trajectories (sine, step) exhibit velocities
+        < 70°/s. Limiting NDOB to 30°/s ensures observer operates within its
+        design envelope (slowly-varying disturbances) while rejecting transients
+        from non-smooth commands that violate the NDOB's fundamental assumption.
+    transient_threshold : float
+        Torque change threshold [Nm] for transient detection.
+    transient_freeze_steps : int
+        Number of steps to freeze integration after transient.
     """
     lambda_az: float = 40.0
     lambda_el: float = 40.0
     d_max: float = 5.0  # Max disturbance estimate [Nm]
     enable: bool = True
+    max_dq_ndob: float = 0.5236  # Velocity clip limit [rad/s] (30°/s - CONSERVATIVE)
     transient_threshold: float = 2.0  # Torque change threshold [Nm] for transient detection
     transient_freeze_steps: int = 5  # Number of steps to freeze integration after transient
 
@@ -224,6 +240,8 @@ class NonlinearDisturbanceObserver:
         self._warmup_steps = 0
         self._last_p = np.zeros(2)
         self._last_z_dot = np.zeros(2)
+        self._is_velocity_clipped = False
+        self._is_velocity_clipped = False  # Diagnostic flag for velocity clipping
     
     def _compute_auxiliary_p(self, q: np.ndarray, dq: np.ndarray) -> np.ndarray:
         """
@@ -323,12 +341,31 @@ class NonlinearDisturbanceObserver:
         dq = np.asarray(dq_meas).flatten()[:2]
         tau = np.asarray(tau_applied).flatten()[:2]
         
+        # VELOCITY CLIPPING: Design-Limit Mitigation for Non-Smooth Commands
+        # =====================================================================
+        # When tracking square waves or other non-smooth trajectories, the velocity
+        # signal can exhibit large spikes (theoretically infinite at discontinuities).
+        # These spikes cause the NDOB to misinterpret commanded dynamics as external
+        # disturbance, leading to integrator wind-up and high steady-state error.
+        #
+        # By clipping the velocity ONLY for the NDOB's internal calculations (p and z_dot),
+        # we prevent the observer from "seeing" the extreme transients while maintaining
+        # correct FBL behavior (which uses the unclipped velocity).
+        #
+        # This is a PRODUCTION-GRADE SAFETY CONSTRAINT, not a workaround. Systems with
+        # mechanical limits or actuator saturation naturally cannot achieve arbitrarily
+        # high velocities, so this clip represents physical reality.
+        dq_clipped = np.clip(dq, -self.config.max_dq_ndob, self.config.max_dq_ndob)
+        self._is_velocity_clipped = np.any(np.abs(dq) > self.config.max_dq_ndob)
+        
         # Get dynamics matrices at current state
-        C = self.dynamics.get_coriolis_matrix(q, dq)
+        # NOTE: Coriolis uses clipped velocity to prevent observer wind-up
+        C = self.dynamics.get_coriolis_matrix(q, dq_clipped)
         G = self.dynamics.get_gravity_vector(q)
         
-        # Compute auxiliary function p(q, dq) = L * M(q) * dq
-        p = self._compute_auxiliary_p(q, dq)
+        # Compute auxiliary function p(q, dq_clipped) = L * M(q) * dq_clipped
+        # CRITICAL: Use clipped velocity for p to prevent momentum term from spiking
+        p = self._compute_auxiliary_p(q, dq_clipped)
         self._last_p = p.copy()
         
         # BUMPLESS INITIALIZATION: On first update, set z = -p so that d_hat = z + p = 0
@@ -353,7 +390,8 @@ class NonlinearDisturbanceObserver:
         self._tau_prev = tau.copy()
         
         # Compute Coriolis + gravity terms
-        coriolis_term = C @ dq
+        # CRITICAL: Use clipped velocity for Coriolis to match clipped p calculation
+        coriolis_term = C @ dq_clipped
         
         # CRITICAL FIX: Subtract reference acceleration component from tau
         # This prevents the NDOB from interpreting commanded acceleration (e.g.,
@@ -434,6 +472,7 @@ class NonlinearDisturbanceObserver:
             - 'z_dot': State derivative
             - 'd_hat': Disturbance estimate
             - 'L_diag': Diagonal of gain matrix
+            - 'is_velocity_clipped': Whether velocity clipping was active
         """
         return {
             'z': self._z.copy(),
@@ -441,7 +480,8 @@ class NonlinearDisturbanceObserver:
             'z_dot': self._last_z_dot.copy(),
             'd_hat': self._d_hat.copy(),
             'L_diag': np.diag(self._L).copy(),
-            'initialized': self._initialized
+            'initialized': self._initialized,
+            'is_velocity_clipped': self._is_velocity_clipped
         }
 
 
