@@ -282,15 +282,20 @@ class DigitalTwinRunner:
             gravity=self.gravity
         )
 
-        # Create    seperate dynamics instance for computing simulations. The real model.
-        # This is NOT used for the NDOB and feedback linearization.
-        self.dynamics_sim = GimbalDynamics(
-            pan_mass=self.pan_mass,
-            tilt_mass=self.tilt_mass,
-            cm_r=self.cm_r,
-            cm_h=self.cm_h,
-            gravity=self.gravity
-        )
+        # Create dynamics instance for simulation
+        # For PRODUCTION: Use the SAME model as the controller to ensure FBL+NDOB works
+        # For TESTING mismatch robustness: Uncomment the alternative below
+        #self.dynamics_sim = self.dynamics  # Same model (production config)
+        
+        # ALTERNATIVE: Mismatched model for robustness testing
+        if(1):
+            self.dynamics_sim = GimbalDynamics(
+             pan_mass=self.pan_mass+0.15,  # Slight mismatch for realism
+             tilt_mass=self.tilt_mass+0.15,
+             cm_r=self.cm_r+0.002,
+             cm_h=self.cm_h+0.005,
+             gravity=self.gravity
+         )
         
         # Compute inertias from mass matrix at zero position (q=0)
         # For a 2-DOF gimbal, inertia_az = M[0,0] and inertia_el = M[1,1] at q=0
@@ -710,7 +715,8 @@ class DigitalTwinRunner:
 
             # 3. Compute Accelerations via Inverted Mass Matrix
             # q̈ = M⁻¹(τ_net - C·q̇ - G)
-            # We use the dynamics_sim instance to simulate the realistic plant To test the capabilites of FBL+NDOB
+            # Use dynamics_sim instance which has plant/model mismatch for realism
+            # NDOB and FBL use self.dynamics (nominal model) while plant uses dynamics_sim
             q_dd = self.dynamics_sim.compute_forward_dynamics(q, dq, tau_net)
 
             # 4. Numerical Integration (Semi-Implicit / Symplectic Euler)

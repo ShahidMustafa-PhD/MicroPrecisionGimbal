@@ -572,6 +572,7 @@ class FeedbackLinearizationController(BaseController):
         # If the plant applies tau_net = tau_motor - D*dq, we must add D*dq to command
         self.friction_az = config.get('friction_az', 0.0)  # N·m·s/rad
         self.friction_el = config.get('friction_el', 0.0)  # N·m·s/rad
+        print(f"DEBUG FBL Controller: friction_az={self.friction_az}, friction_el={self.friction_el}")
         
         # Conditional friction compensation (CRITICAL for stability)
         # When True, only compensate friction if velocity is in same direction as desired acceleration

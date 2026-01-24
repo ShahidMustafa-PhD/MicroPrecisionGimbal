@@ -131,8 +131,8 @@ class PointingStateEstimator:
         self.friction_el: float = config.get('friction_coeff_el', 0.1)  # N·m·s/rad
         
         # Initialize GimbalDynamics for true physical model
-        pan_mass = config.get('pan_mass', 0.5)
-        tilt_mass = config.get('tilt_mass', 0.25)
+        pan_mass = config.get('pan_mass', 1)
+        tilt_mass = config.get('tilt_mass', 0.5)
         cm_r = config.get('cm_r', 0.0)  # Default to 0 for symmetric gimbal
         cm_h = config.get('cm_h', 0.0)  # Default to 0 for symmetric gimbal
         gravity = config.get('gravity', 9.81)
