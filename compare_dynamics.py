@@ -88,10 +88,10 @@ def main():
     
     # Create GimbalDynamics instance
     gimbal = GimbalDynamics(
-        pan_mass=0.5,
-        tilt_mass=0.25,
-        cm_r=0.002,
-        cm_h=0.005,
+        pan_mass=1,
+        tilt_mass=0.5,
+        cm_r=0.0,
+        cm_h=0.0,
         gravity=9.81
     )
     
