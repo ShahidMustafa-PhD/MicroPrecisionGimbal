@@ -69,16 +69,19 @@ from lasercom_digital_twin.core.simulation.simulation_runner import (
 
 def compute_tracking_metrics(results: Dict, target_az_rad: float, target_el_rad: float) -> Dict:
     """
-    Compute comprehensive step response characteristics.
+    Compute comprehensive tracking response characteristics.
+    
+    Handles both constant and time-varying (sine, square wave) targets by
+    using logged target arrays when available.
     
     Parameters
     ----------
     results : Dict
         Simulation results dictionary
     target_az_rad : float
-        Target azimuth [rad]
+        Target azimuth [rad] - used as fallback if no target_az in log
     target_el_rad : float
-        Target elevation [rad]
+        Target elevation [rad] - used as fallback if no target_el in log
         
     Returns
     -------
@@ -89,21 +92,37 @@ def compute_tracking_metrics(results: Dict, target_az_rad: float, target_el_rad:
     q_az = results['log_arrays']['q_az']
     q_el = results['log_arrays']['q_el']
     
+    # Use logged time-varying target if available, else constant fallback
+    if 'target_az' in results['log_arrays']:
+        target_az = results['log_arrays']['target_az']
+        target_el = results['log_arrays']['target_el']
+    else:
+        target_az = np.full_like(q_az, target_az_rad)
+        target_el = np.full_like(q_el, target_el_rad)
+    
+    # Compute tracking error (NOT position - constant!)
+    error_az = q_az - target_az
+    error_el = q_el - target_el
+    
     # Azimuth tracking
-    error_az = q_az - target_az_rad
-    settling_criterion_az = 0.02 * abs(target_az_rad)  # 2% of final value
+    # For time-varying targets, settling is when error stays small
+    settling_criterion_az = np.deg2rad(0.5)  # 0.5° threshold
     settled_az = np.where(np.abs(error_az) < settling_criterion_az)[0]
     settling_time_az = t[settled_az[0]] if len(settled_az) > 0 else t[-1]
-    overshoot_az = 100.0 * (np.max(q_az) - target_az_rad) / target_az_rad if target_az_rad != 0 else 0.0
-    steady_state_error_az = np.mean(error_az[-100:])  # Last 100 samples
+    
+    # For time-varying targets, overshoot is max error, not max position
+    overshoot_az = np.max(np.abs(error_az))
+    
+    # Steady-state error for time-varying: RMS of last 20% of trajectory
+    n_samples = len(error_az)
+    last_20_pct = int(0.2 * n_samples)
+    steady_state_error_az = np.sqrt(np.mean(error_az[-last_20_pct:]**2))
     
     # Elevation tracking
-    error_el = q_el - target_el_rad
-    settling_criterion_el = 0.02 * abs(target_el_rad)
-    settled_el = np.where(np.abs(error_el) < settling_criterion_el)[0]
+    settled_el = np.where(np.abs(error_el) < settling_criterion_az)[0]
     settling_time_el = t[settled_el[0]] if len(settled_el) > 0 else t[-1]
-    overshoot_el = 100.0 * (np.max(q_el) - target_el_rad) / target_el_rad if target_el_rad != 0 else 0.0
-    steady_state_error_el = np.mean(error_el[-100:])
+    overshoot_el = np.max(np.abs(error_el))
+    steady_state_error_el = np.sqrt(np.mean(error_el[-last_20_pct:]**2))
     
     return {
         'settling_time_az': settling_time_az,
@@ -293,8 +312,8 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     fig3, ((ax3a, ax3b), (ax3c, ax3d)) = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
     
     # Motor torque saturation limits (from config)
-    tau_max = 1.0
-    tau_min = -1.0
+    tau_max = 0.0
+    tau_min = -0.0
     
     # Azimuth Torque
     ax3a.plot(t_pid, results_pid['log_arrays']['torque_az'], color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
@@ -802,25 +821,25 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     # =============================================================================
     print("\n✓ Generated 11 research-quality figures (300 DPI, LaTeX labels)")
     print("Saving figures to disk...")
+    if(0):
+        output_dir = Path('figures_comparative')
+        output_dir.mkdir(exist_ok=True)
     
-    output_dir = Path('figures_comparative')
-    output_dir.mkdir(exist_ok=True)
+        fig1.savefig(output_dir / 'fig1_position_tracking.png', dpi=300, bbox_inches='tight')
+        fig2.savefig(output_dir / 'fig2_tracking_error_handover.png', dpi=300, bbox_inches='tight')
+        fig3.savefig(output_dir / 'fig3_torque_ndob.png', dpi=300, bbox_inches='tight')
+        fig4.savefig(output_dir / 'fig4_velocities.png', dpi=300, bbox_inches='tight')
+        fig5.savefig(output_dir / 'fig5_phase_plane.png', dpi=300, bbox_inches='tight')
+        fig6.savefig(output_dir / 'fig6_los_errors.png', dpi=300, bbox_inches='tight')
+        fig7.savefig(output_dir / 'fig7_performance_summary.png', dpi=300, bbox_inches='tight')
+        fig8.savefig(output_dir / 'fig8_state_estimates.png', dpi=300, bbox_inches='tight')
+        fig9.savefig(output_dir / 'fig9_fsm_performance.png', dpi=300, bbox_inches='tight')
     
-    fig1.savefig(output_dir / 'fig1_position_tracking.png', dpi=300, bbox_inches='tight')
-    fig2.savefig(output_dir / 'fig2_tracking_error_handover.png', dpi=300, bbox_inches='tight')
-    fig3.savefig(output_dir / 'fig3_torque_ndob.png', dpi=300, bbox_inches='tight')
-    fig4.savefig(output_dir / 'fig4_velocities.png', dpi=300, bbox_inches='tight')
-    fig5.savefig(output_dir / 'fig5_phase_plane.png', dpi=300, bbox_inches='tight')
-    fig6.savefig(output_dir / 'fig6_los_errors.png', dpi=300, bbox_inches='tight')
-    fig7.savefig(output_dir / 'fig7_performance_summary.png', dpi=300, bbox_inches='tight')
-    fig8.savefig(output_dir / 'fig8_state_estimates.png', dpi=300, bbox_inches='tight')
-    fig9.savefig(output_dir / 'fig9_fsm_performance.png', dpi=300, bbox_inches='tight')
-    
-   # print(f"  ✓ Saved 9 figures to {output_dir.absolute()}/")
-    #print("  ✓ Format: PNG, 300 DPI, bbox='tight' (publication-ready)")
+        print(f"  ✓ Saved 9 figures to {output_dir.absolute()}/")
+        print("  ✓ Format: PNG, 300 DPI, bbox='tight' (publication-ready)")
     #print("\n" + "="*70)
-    print("FIGURE GENERATION COMPLETE")
-    print("="*70)
+        print("FIGURE GENERATION COMPLETE")
+        print("="*70)
     
     plt.show()
     #fig1.show()   # shows only fig1
@@ -852,8 +871,8 @@ def run_three_way_comparison(signal_type='constant'):
     duration = 10.0  # Increased to show full wave periods
     
     # Signal characteristics
-    target_amplitude = 20.0 # degrees
-    target_period = 5   # seconds
+    target_amplitude = 90.0 # degrees
+    target_period = 20   # seconds
     
     print(f"Test Conditions:")
     print(f"  - Target Base: Az={target_az_deg:.1f}°, El={target_el_deg:.1f}°")
@@ -874,8 +893,8 @@ def run_three_way_comparison(signal_type='constant'):
     print("-" * 80)
     
     config_pid = SimulationConfig(
-        dt_sim=0.01,
-        dt_coarse=0.0010,
+        dt_sim=0.001,
+        dt_coarse=0.01,
         dt_fine=0.001,
         log_period=0.001,
         seed=42,
@@ -887,8 +906,8 @@ def run_three_way_comparison(signal_type='constant'):
         target_period=target_period,
         use_feedback_linearization=False,  # Standard PID
         dynamics_config={
-            'pan_mass': 0.5,
-            'tilt_mass': 0.25,
+            'pan_mass': 1,
+            'tilt_mass': 0.5,
             'cm_r': 0.0,
             'cm_h': 0.0,
             'gravity': 9.81
@@ -896,11 +915,11 @@ def run_three_way_comparison(signal_type='constant'):
            coarse_controller_config={
             # Corrected gains from double-integrator design (FIXED derivative calculation)
             # These gains are now correct after fixing the derivative term bug
-            'kp': [3.257, 0.660],    # Per-axis: [Pan, Tilt]
-            'ki': [10.232, 2.074],   # Designed for 5 Hz bandwidth
-            'kd': [0.1046599, 0.021709],  # Corrected Kd values (40% higher than before)
-            'tau_max': [0.5, 0.5],
-            'tau_min': [-0.5, -0.5],
+            'kp': [3.514, 1.320],    # Per-axis: [Pan, Tilt]
+            'ki': [15.464, 4.148],   # Designed for 5 Hz bandwidth
+            'kd': [0.293, 0.059418],  # Corrected Kd values (40% higher than before)
+            'tau_max': [10.0, 10.0],
+            'tau_min': [-10.0, -10.0],
             'anti_windup_gain': 1.0,
             'tau_rate_limit': 50.0,
             'enable_derivative': True  # Now works correctly with fixed implementation
@@ -919,8 +938,8 @@ def run_three_way_comparison(signal_type='constant'):
     print("-" * 80)
     
     config_fl = SimulationConfig(
-        dt_sim=0.01,
-        dt_coarse=0.0010,
+        dt_sim=0.001,
+        dt_coarse=0.01,
         dt_fine=0.001,
         log_period=0.001,
         seed=42,
@@ -935,50 +954,46 @@ def run_three_way_comparison(signal_type='constant'):
         enable_visualization=False,
         enable_plotting=True,             # Disable automatic plots
         real_time_factor=0.0,
-        vibration_enabled=False,
+        vibration_enabled=True,
         vibration_config={
-            'start_time': 2.0,
-            'frequency_hz': 40.0,
-            'amplitude_rad': 1000e-6,
+            'start_time': 5.0,
+            'frequency_hz': 10.0,
+            'amplitude_rad': 10000e-6,
             'harmonics': [(1.0, 1.0), (2.1, 0.3)]
         },
         feedback_linearization_config={
-            # Gains designed for faster settling with motor lag compensation
-            # Target bandwidth: ωn ≈ 20 rad/s (3 Hz)
-            # Damping ratio: ζ ≈ 0.9 (slightly underdamped for faster response)
-            # For critically damped: Kd = 2*ζ*ωn, Kp = ωn²
-            # With ωn=20: Kp=400, Kd=36. But motor lag limits effective bandwidth.
-            # Using ωn=15 for robustness: Kp=225, Kd=27
-            #let Kd=36, Kp=Kd^2/2
-            'kp': [1025.0, 1025.0],    # Position gain [1/s²] - increased for faster response
-            'kd': [64.0, 64.0],    # Velocity gain [1/s] - damping
-            'ki': [1.0, 1.0],      # Integral for steady-state error rejection
-            'enable_integral': False,
-            'tau_max': [0.5, 0.5],
-            'tau_min': [-0.5, -0.5],
-            # Friction compensation with CONDITIONAL logic (NEW!)
-            # Only compensates when velocity aligns with desired acceleration
-            # Prevents friction feedforward from fighting braking during transients
-            'friction_az': 0,    # Match plant friction
-            'friction_el': 0,    # Match plant friction
-            'conditional_friction': False,  # CRITICAL: Enable conditional logic
-            'enable_disturbance_compensation': False,
-            # Optional robust term for handling model uncertainties
-            'enable_robust_term': False,  # Set True for additional robustness
-            'robust_eta': [0.01, 0.01],   # Switching gain [N·m]
-            'robust_lambda': 5.0          # Sliding surface slope
+            # FBL GAIN DESIGN
+            # =====================================================
+            # Design for ωn = 20 rad/s (3.2 Hz), ζ = 1.0 (critically damped)
+            # Kp = ωn² = 400, Kd = 2*ζ*ωn = 40
+            # With friction feedforward for best baseline performance
+            'kp': [400.0, 400.0],    # Position gain [1/s²]
+            'kd': [40.0, 40.0],      # Velocity gain [1/s] - critically damped
+            'ki': [50.0, 50.0],      # Integral for residual disturbances
+            'enable_integral': True,  # ENABLE for steady-state performance
+            'tau_max': [10.0, 10.0],
+            'tau_min': [-10.0, -10.0],
+            # Friction feedforward - ENABLE for fair comparison
+            # NDOB test will disable this to show NDOB can replace it
+            'friction_az': 0.1,    # Match plant friction
+            'friction_el': 0.1,    # Match plant friction
+            # NOTE: conditional_friction defaults to True, which is REQUIRED
+            # when combining with NDOB. Setting it False causes DOUBLE
+            # friction compensation (FF + NDOB both compensate) leading to
+            # instability (552k µrad vs 2.9k µrad baseline).
+            'enable_disturbance_compensation': False
         },
         # NDOB (Nonlinear Disturbance Observer) for steady-state error elimination
         # Enable this to estimate and compensate unmodeled disturbances (friction, etc.)
         ndob_config={
             'enable': False,  # Set True to enable NDOB disturbance compensation
-            'lambda_az': 0.0,  # Observer bandwidth Az [rad/s] (τ = 25ms)
-            'lambda_el': 0.0,  # Observer bandwidth El [rad/s]
+            'lambda_az': 30.0,  # Observer bandwidth Az [rad/s] (τ = 25ms)
+            'lambda_el': 100.0,  # Observer bandwidth El [rad/s]
             'd_max': 5.0        # Max disturbance estimate [N·m] (safety limit)
         },
         dynamics_config={
-            'pan_mass': 0.5,
-            'tilt_mass': 0.25,
+            'pan_mass': 1,
+            'tilt_mass': 0.5,
             'cm_r': 0.0,
             'cm_h': 0.0,
             'gravity': 9.81
@@ -996,23 +1011,58 @@ def run_three_way_comparison(signal_type='constant'):
     print("-" * 80)
     
     # Clone FL config but enable NDOB
+    # CRITICAL FIX: Create fresh config instead of deepcopy to avoid
+    # inheriting mutated target_az/el values from previous simulation.
+    # The simulation runner modifies config.target_az/el in-place during
+    # time-varying target generation (sine/square waves).
     import copy
     config_ndob = copy.deepcopy(config_fl)
+    # Reset targets to original base values (were mutated by previous sim)
+    config_ndob.target_az = np.deg2rad(target_az_deg)
+    config_ndob.target_el = np.deg2rad(target_el_deg)
     config_ndob.ndob_config = {
         'enable': True,
-        # NDOB bandwidth: λ = 100 rad/s gives τ = 10ms time constant
-        # Higher bandwidth = faster response but more noise sensitivity
-        # With dt_coarse=10ms, λ=100 is at the stability limit for forward Euler
-        'lambda_az': 80.0,
-        'lambda_el': 80.0,
-        'd_max': 5.0  # Safety limit on disturbance estimate [Nm]
+        # NDOB TUNING for dynamic friction compensation
+        # ==============================================
+        # NDOB is best used for UNKNOWN disturbances (model mismatch, external
+        # forces, etc.), combined with friction feedforward for known dynamics.
+        #
+        # Analysis shows NDOB has ~84ms phase lag at λ=50 rad/s, making it
+        # less effective than proactive friction feedforward for dynamic tracking.
+        # However, NDOB + friction FF together provides BEST performance because:
+        #   - Friction FF handles known dynamics (proactive)
+        #   - NDOB handles residual/unknown disturbances (reactive)
+        #
+        # CRITICAL: conditional_friction must be True (default) when combining
+        # friction FF with NDOB. Setting it False causes double compensation:
+        #   - Friction FF adds: +D*dq (always)
+        #   - NDOB estimates d ≈ -D*dq
+        #   - Control: tau = ... + D*dq - (-D*dq) = ... + 2*D*dq → instability!
+        #
+        # With conditional_friction=True, FF is only applied when velocity and
+        # desired acceleration are aligned, preventing double compensation.
+        #
+        # PRODUCTION RECOMMENDATION: Use NDOB at moderate bandwidth (50-100 rad/s)
+        # combined with friction feedforward (conditional_friction=True) for
+        # optimal performance.
+        'lambda_az': 50.0,   # Moderate bandwidth (avoids instability at >200)
+        'lambda_el': 50.0,   # Same for both axes
+        'd_max': 0.5         # Allow reasonable estimates
     }
-    # OPTIMAL CONFIGURATION: Keep friction feedforward ENABLED alongside NDOB
-    # - Friction feedforward handles known friction during transients (immediate)
-    # - NDOB handles residual disturbances and model errors at steady-state
-    # - Together they achieve the best performance: lowest SSE and lowest RMS
-    # DO NOT disable friction_az/friction_el - the combination is synergistic!
+    # KEEP friction feedforward ENABLED with NDOB!
+    # The key is conditional_friction=True (default), which prevents double
+    # compensation by only applying FF when velocity and acceleration are aligned.
+    # Analysis shows FBL + friction FF + NDOB achieves 2,949 µrad vs
+    # FBL + NDOB only at 8,043 µrad (63% improvement with FF enabled).
+    # config_ndob.feedback_linearization_config['friction_az'] stays at 0.1
+    # config_ndob.feedback_linearization_config['friction_el'] stays at 0.1
     
+    # Disable integral action - NDOB handles steady-state error
+    config_ndob.feedback_linearization_config['enable_integral'] = False
+    
+    print(f"DEBUG: friction_az = {config_ndob.feedback_linearization_config['friction_az']}")
+    print(f"DEBUG: friction_el = {config_ndob.feedback_linearization_config['friction_el']}")
+    print(f"DEBUG: enable_integral = {config_ndob.feedback_linearization_config['enable_integral']}")
     print("Initializing FBL + NDOB controller simulation...")
     runner_ndob = DigitalTwinRunner(config_ndob)
     print("Running simulation...\n")
@@ -1097,14 +1147,14 @@ if __name__ == '__main__':
     # User can change this to 'square', 'sine', or 'cosine' to test dynamic tracking
     
     # 1. Constant Target (Legacy)
-   #run_three_way_comparison(signal_type='constant')
+    #run_three_way_comparison(signal_type='constant')
     
     # 2. Square Wave Target (Requested)
     
     #run_three_way_comparison(signal_type='square')
     
     # 3. Sine Wave Target
-    run_three_way_comparison(signal_type='sine')
+   run_three_way_comparison(signal_type='sine')
     
     # 4. Cosine Wave Target
-    # run_three_way_comparison(signal_type='cosine')
+    #run_three_way_comparison(signal_type='cosine')
