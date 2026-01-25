@@ -1,0 +1,24 @@
+// Feedback Linearization Control
+digraph feedback_linearization_diagram {
+	bgcolor=transparent dpi=300 fontname="Times-Roman" fontsize=14 nodesep=0.6 rankdir=LR ranksep=0.8 splines=polyline
+	node [fontname="Times-Roman" fontsize=14 penwidth=2.0]
+	edge [arrowhead=normal arrowsize=0.8 color="#000000" fontname="Times-Roman" fontsize=12]
+	ref [label="Reference
+r(t)" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=1.2]
+	controller [label="Outer Loop
+PID" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=1.5]
+	fbl [label="Feedback
+Linearization" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=2.0]
+	plant [label="Nonlinear
+Plant" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=1.5]
+	sum_err [label="∑" color="#000000" fillcolor="#FFFFFF" fixedsize=true fontsize=16 height=0.4 shape=circle style=filled width=0.4]
+	ref -> sum_err [label="  r  " style=solid]
+	sum_err:e -> controller [label="  e  " style=solid]
+	controller -> fbl [label="  v  " style=solid]
+	fbl -> plant [label="  τ  " style=solid]
+	plant -> sum_err [label="  y  " color="#000000" constraint=false style=solid]
+	output [label="" height=0.01 shape=point style=invis width=0.01]
+	plant:e -> output [label="  y(t)  " style=solid]
+	dist [label="Disturbance d" fontsize=12 shape=plaintext]
+	dist -> plant:n [arrowhead=normal color="#666666" style=solid]
+}

@@ -1,0 +1,29 @@
+// Robot Manipulator Control System
+digraph robot_control_diagram {
+	bgcolor=transparent dpi=300 fontname="Times-Roman" fontsize=14 nodesep=0.6 rankdir=LR ranksep=0.8 splines=polyline
+	node [fontname="Times-Roman" fontsize=14 penwidth=2.0]
+	edge [arrowhead=normal arrowsize=0.8 color="#000000" fontname="Times-Roman" fontsize=12]
+	trajectories [label="Desired
+Trajectories" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=1.5]
+	errors [label="Tracking
+Errors" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=1.5]
+	controller [label="Computed Torque Control" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=2.5]
+	robot [label="Robot Manipulator" color="#CC8800" fillcolor="#FFE5CC" height=1.0 shape=box style="rounded,filled" width=2.0]
+	observer [label="Extended State
+Observer" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=2.0]
+	sum1 [label="∑" color="#000000" fillcolor="#FFFFFF" fixedsize=true fontsize=16 height=0.4 shape=circle style=filled width=0.4]
+	trajectories -> errors [style=solid]
+	errors -> controller [label="  z₁, z₂  " style=solid]
+	controller:e -> sum1 [label="  u₀  " style=solid]
+	sum1:e -> robot [label="  u(t)  " style=solid]
+	robot -> observer:s [label="  x₁  " style=solid]
+	robot -> errors [label="  x₁  " color="#000000" constraint=false style=solid]
+	observer -> errors [label="  x̂₂  " color="#000000" constraint=false style=solid]
+	observer -> sum1 [label="  uᶜ  " color="#000000" constraint=false style=solid]
+	output [label="" height=0.01 shape=point style=invis width=0.01]
+	robot:e -> output [label="  x₁  " style=solid]
+	disturbance1 [label=Uncertainty fontsize=12 shape=plaintext]
+	disturbance1 -> robot:n [arrowhead=normal color="#666666" style=solid]
+	disturbance2 [label="Unknown Fault" fontsize=12 shape=plaintext]
+	disturbance2 -> robot:n [arrowhead=normal color="#666666" style=solid]
+}

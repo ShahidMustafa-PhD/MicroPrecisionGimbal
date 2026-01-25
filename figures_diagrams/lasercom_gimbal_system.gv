@@ -1,0 +1,55 @@
+// Lasercom Gimbal Digital Twin
+digraph lasercom_gimbal_system {
+	bgcolor=transparent dpi=300 fontname="Times-Roman" fontsize=14 nodesep=0.6 rankdir=LR ranksep=0.8 splines=polyline
+	node [fontname="Times-Roman" fontsize=14 penwidth=2.0]
+	edge [arrowhead=normal arrowsize=0.8 color="#000000" fontname="Times-Roman" fontsize=12]
+	target_gen [label="Target
+Generation" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=1.5]
+	sum_track_err [label="∑" color="#000000" fillcolor="#FFFFFF" fixedsize=true fontsize=16 height=0.4 shape=circle style=filled width=0.4]
+	fbl_ctrl [label="Feedback
+Linearization
++ NDOB" color="#CC8800" fillcolor="#FFE5CC" height=1.2 shape=box style="rounded,filled" width=2.0]
+	sum_voltage [label="∑" color="#000000" fillcolor="#FFFFFF" fixedsize=true fontsize=16 height=0.4 shape=circle style=filled width=0.4]
+	motors [label="Gimbal Motors
+(Az, El)" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=1.8]
+	fsm_act [label="FSM
+Actuator" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=1.5]
+	gimbal_dyn [label="2-DOF Gimbal
+Dynamics
+M(q)q̈ + C + G" color="#CC8800" fillcolor="#FFE5CC" height=1.2 shape=box style="rounded,filled" width=2.2]
+	sensors [label="Sensors
+(Encoders, Gyros,
+QPD)" color="#CC8800" fillcolor="#FFE5CC" height=1.0 shape=box style="rounded,filled" width=1.8]
+	ekf [label="Extended
+Kalman Filter
+(EKF)" color="#CC8800" fillcolor="#FFE5CC" height=1.0 shape=box style="rounded,filled" width=1.8]
+	fsm_ctrl [label="FSM
+PIDF
+Controller" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=1.5]
+	optics [label="Optical
+Chain" color="#CC8800" fillcolor="#FFE5CC" height=0.7 shape=box style="rounded,filled" width=1.3]
+	target_gen -> sum_track_err [label="  θ_ref  " style=solid]
+	sum_track_err:e -> fbl_ctrl [label="  e_track  " style=solid]
+	fbl_ctrl:e -> sum_voltage [label="  τ_cmd  " style=solid]
+	sum_voltage:e -> motors [label="  V_motor  " style=solid]
+	motors -> gimbal_dyn [label="  τ_motor  " style=solid]
+	gimbal_dyn -> sensors:w [label="  q, q̇  " style=solid]
+	sensors -> ekf [label="  z_meas
+(enc, gyro, QPD)  " style=solid]
+	ekf -> sum_track_err [label="  q̂, q̂̇  " color="#000000" constraint=false style=solid]
+	ekf -> fbl_ctrl [label="  state est  " color="#000000" constraint=false style=solid]
+	ekf -> fsm_ctrl [label="  e_fine  " color="#000000" constraint=false style=solid]
+	fsm_ctrl -> fsm_act [label="  α_cmd  " style=solid]
+	fsm_act -> optics [label="  α_fsm  " style=solid]
+	output_los [label="" height=0.01 shape=point style=invis width=0.01]
+	optics:e -> output_los [label="  LOS  " style=solid]
+	dist_friction [label="Friction
+Model Mismatch" fontsize=12 shape=plaintext]
+	dist_friction -> gimbal_dyn:n [arrowhead=normal color="#666666" style=solid]
+	dist_vibration [label="Base
+Vibration" fontsize=12 shape=plaintext]
+	dist_vibration -> gimbal_dyn:n [arrowhead=normal color="#666666" style=solid]
+	dist_sensor [label="Sensor
+Noise" fontsize=12 shape=plaintext]
+	dist_sensor -> sensors:n [arrowhead=normal color="#666666" style=solid]
+}

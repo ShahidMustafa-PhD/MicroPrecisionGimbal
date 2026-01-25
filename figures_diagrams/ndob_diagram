@@ -1,0 +1,28 @@
+// NDOB Control Architecture
+digraph ndob_diagram {
+	bgcolor=transparent dpi=300 fontname="Times-Roman" fontsize=14 nodesep=0.6 rankdir=LR ranksep=0.8 splines=polyline
+	node [fontname="Times-Roman" fontsize=14 penwidth=2.0]
+	edge [arrowhead=normal arrowsize=0.8 color="#000000" fontname="Times-Roman" fontsize=12]
+	ref [label="r(t)" color="#CC8800" fillcolor="#FFE5CC" height=0.6 shape=box style="rounded,filled" width=1.0]
+	controller [label="Controller
+C(s)" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=1.5]
+	plant [label="Plant
+P(s)" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=1.5]
+	ndob [label="NDOB
+λ/(s+λ)" color="#CC8800" fillcolor="#FFE5CC" height=0.8 shape=box style="rounded,filled" width=1.5]
+	sum_err [label="∑" color="#000000" fillcolor="#FFFFFF" fixedsize=true fontsize=16 height=0.4 shape=circle style=filled width=0.4]
+	sum_disturbance [label="∑" color="#000000" fillcolor="#FFFFFF" fixedsize=true fontsize=16 height=0.4 shape=circle style=filled width=0.4]
+	sum_comp [label="∑" color="#000000" fillcolor="#FFFFFF" fixedsize=true fontsize=16 height=0.4 shape=circle style=filled width=0.4]
+	ref -> sum_err [style=solid]
+	sum_err -> controller [label="  e  " style=solid]
+	controller -> sum_comp [label="  u₀  " style=solid]
+	sum_comp -> sum_disturbance [label="  u  " style=solid]
+	sum_disturbance -> plant [label="  u+d  " style=solid]
+	sum_disturbance -> ndob:s [label="  u+d  " style=solid]
+	ndob -> sum_comp [label="  d̂  " color="#000000" constraint=false style=solid]
+	plant -> sum_err [label="  y  " color="#000000" constraint=false style=solid]
+	dist [label=d fontsize=12 shape=plaintext]
+	dist -> sum_disturbance:n [arrowhead=normal color="#666666" style=solid]
+	output [label="" height=0.01 shape=point style=invis width=0.01]
+	plant -> output [label="  y(t)  " style=solid]
+}

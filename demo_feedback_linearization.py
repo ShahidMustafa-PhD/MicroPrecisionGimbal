@@ -821,7 +821,7 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     # =============================================================================
     print("\n✓ Generated 11 research-quality figures (300 DPI, LaTeX labels)")
     print("Saving figures to disk...")
-    if(0):
+    if(1):
         output_dir = Path('figures_comparative')
         output_dir.mkdir(exist_ok=True)
     
@@ -834,6 +834,8 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
         fig7.savefig(output_dir / 'fig7_performance_summary.png', dpi=300, bbox_inches='tight')
         fig8.savefig(output_dir / 'fig8_state_estimates.png', dpi=300, bbox_inches='tight')
         fig9.savefig(output_dir / 'fig9_fsm_performance.png', dpi=300, bbox_inches='tight')
+        fig10.savefig(output_dir / 'fig10_internal_signals.png', dpi=300, bbox_inches='tight')
+        fig11.savefig(output_dir / 'fig11_ekf_adaptive_tuning.png', dpi=300, bbox_inches='tight')
     
         print(f"  ✓ Saved 9 figures to {output_dir.absolute()}/")
         print("  ✓ Format: PNG, 300 DPI, bbox='tight' (publication-ready)")
@@ -868,11 +870,11 @@ def run_three_way_comparison(signal_type='constant'):
     # Common test parameters
     target_az_deg = 0
     target_el_deg = 0
-    duration = 10.0  # Increased to show full wave periods
+    duration = 2.5  # Increased to show full wave periods
     
     # Signal characteristics
     target_amplitude = 90.0 # degrees
-    target_period = 20   # seconds
+    target_period = 5   # seconds
     
     print(f"Test Conditions:")
     print(f"  - Target Base: Az={target_az_deg:.1f}°, El={target_el_deg:.1f}°")
