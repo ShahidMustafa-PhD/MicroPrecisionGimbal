@@ -847,13 +847,25 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     #fig1.show()   # shows only fig1
     #input("Press Enter to close...")
 
-def run_three_way_comparison(signal_type='constant'):
+def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     """
     Execute three sequential simulations for comparative analysis.
     
     Test 1: Standard PID Controller (Baseline)
     Test 2: Feedback Linearization (FBL)
     Test 3: Feedback Linearization + NDOB (FBL+NDOB)
+    
+    Parameters
+    ----------
+    signal_type : str
+        Target trajectory type: 'constant', 'sine', 'square', 'cosine', 'hybridsig'
+    disturbance_config : dict, optional
+        Environmental disturbance configuration. If None, disturbances are disabled.
+        Example:
+            {
+                'wind': {'enabled': True, 'mean_velocity': 8.0, 'start_time': 3.0},
+                'vibration': {'enabled': True, 'modal_frequencies': [15.0, 45.0]},
+            }
     """
     print("\n" + "=" * 80)
     print("THREE-WAY CONTROLLER COMPARISON STUDY")
@@ -877,6 +889,48 @@ def run_three_way_comparison(signal_type='constant'):
     target_period = 20   # seconds
     target_reachangle = 90.0  # degrees - for hybridsig only
     
+    # =============================================================================
+    # Environmental Disturbance Configuration
+    # =============================================================================
+    # Build disturbance config from user input or use defaults
+    env_disturbance_enabled = disturbance_config is not None
+    env_disturbance_cfg = {
+        'seed': 42,
+        'wind': {
+            'enabled': False,
+            'start_time': 3.0,
+            'mean_velocity': 5.0,
+            'turbulence_intensity': 0.15,
+            'scale_length': 200.0,
+            'direction_deg': 45.0,
+            'gimbal_area': 0.02,
+            'gimbal_arm': 0.15,
+        },
+        'vibration': {
+            'enabled': False,
+            'start_time': 0.0,
+            'modal_frequencies': [15.0, 45.0, 80.0],
+            'modal_dampings': [0.02, 0.015, 0.01],
+            'modal_amplitudes': [1e-3, 5e-4, 2e-4],
+            'inertia_coupling': 0.1,
+        },
+        'structural_noise': {
+            'enabled': False,
+            'std': 0.005,
+            'freq_low': 100.0,
+            'freq_high': 500.0,
+        }
+    }
+    
+    # Merge user config
+    if disturbance_config:
+        if 'wind' in disturbance_config:
+            env_disturbance_cfg['wind'].update(disturbance_config['wind'])
+        if 'vibration' in disturbance_config:
+            env_disturbance_cfg['vibration'].update(disturbance_config['vibration'])
+        if 'structural_noise' in disturbance_config:
+            env_disturbance_cfg['structural_noise'].update(disturbance_config['structural_noise'])
+    
     print(f"Test Conditions:")
     print(f"  - Target Base: Az={target_az_deg:.1f}°, El={target_el_deg:.1f}°")
     print(f"  - Signal Type: {signal_type}")
@@ -888,7 +942,26 @@ def run_three_way_comparison(signal_type='constant'):
     print(f"  - Duration: {duration:.1f} seconds")
     print(f"  - Initial: [0°, 0°]")
     print(f"  - Friction: Az=0.1 Nm/(rad/s), El=0.1 Nm/(rad/s)")
-    print(f"  - Plant-Model Mismatch: 10% mass, 5% friction\n")
+    print(f"  - Plant-Model Mismatch: 10% mass, 5% friction")
+    
+    # Print disturbance configuration
+    if env_disturbance_enabled:
+        print(f"\n  Environmental Disturbances (PLANT ONLY - NDOB must estimate):")
+        if env_disturbance_cfg['wind']['enabled']:
+            w = env_disturbance_cfg['wind']
+            print(f"    - Wind: V_mean={w['mean_velocity']:.1f} m/s, "
+                  f"I={w['turbulence_intensity']:.2f}, start={w['start_time']:.1f}s")
+        if env_disturbance_cfg['vibration']['enabled']:
+            v = env_disturbance_cfg['vibration']
+            print(f"    - Vibration: modes={v['modal_frequencies']} Hz, "
+                  f"start={v['start_time']:.1f}s")
+        if env_disturbance_cfg['structural_noise']['enabled']:
+            s = env_disturbance_cfg['structural_noise']
+            print(f"    - Structural Noise: σ={s['std']:.4f} N·m, "
+                  f"f=[{s['freq_low']:.0f}-{s['freq_high']:.0f}] Hz")
+    else:
+        print(f"  - Environmental Disturbances: Disabled")
+    print()
     
     # =============================================================================
     # TEST 1: Standard PID Controller
@@ -911,6 +984,9 @@ def run_three_way_comparison(signal_type='constant'):
         target_period=target_period,
         target_reachangle=target_reachangle,  # For hybridsig: angle to hold after reaching
         use_feedback_linearization=False,  # Standard PID
+        # Environmental disturbances (injected into plant only)
+        environmental_disturbance_enabled=env_disturbance_enabled,
+        environmental_disturbance_config=env_disturbance_cfg,
         dynamics_config={
             'pan_mass': 1,
             'tilt_mass': 0.5,
@@ -934,7 +1010,7 @@ def run_three_way_comparison(signal_type='constant'):
     
     runner_pid = DigitalTwinRunner(config_pid)
     results_pid = runner_pid.run_simulation(duration=duration)
-    print(f"✓ PID Test Complete: LOS RMS = {results_pid['los_error_rms']*1e6:.2f} µrad\n")
+    print(f"[OK] PID Test Complete: LOS RMS = {results_pid['los_error_rms']*1e6:.2f} urad\n")
     
       # =========================================================================
     # Test 2: Feedback Linearization Controller
@@ -1004,11 +1080,15 @@ def run_three_way_comparison(signal_type='constant'):
             'cm_r': 0.0,
             'cm_h': 0.0,
             'gravity': 9.81
-        }
+        },
+        # Environmental disturbances (injected into plant only, not controller model)
+        # This creates the Plant vs. Model dissonance needed for NDOB testing
+        environmental_disturbance_enabled=env_disturbance_enabled,
+        environmental_disturbance_config=env_disturbance_cfg
     )
     runner_fbl = DigitalTwinRunner(config_fl)
     results_fbl = runner_fbl.run_simulation(duration=duration)
-    print(f"✓ FBL Test Complete: LOS RMS = {results_fbl['los_error_rms']*1e6:.2f} µrad\n")
+    print(f"[OK] FBL Test Complete: LOS RMS = {results_fbl['los_error_rms']*1e6:.2f} urad\n")
     
     # =============================================================================
     # TEST 3: Feedback Linearization + NDOB
@@ -1075,7 +1155,7 @@ def run_three_way_comparison(signal_type='constant'):
     runner_ndob = DigitalTwinRunner(config_ndob)
     print("Running simulation...\n")
     results_ndob = runner_ndob.run_simulation(duration=duration)
-    print(f"✓ FBL+NDOB Test Complete: LOS RMS = {results_ndob['los_error_rms']*1e6:.2f} µrad\n")
+    print(f"[OK] FBL+NDOB Test Complete: LOS RMS = {results_ndob['los_error_rms']*1e6:.2f} urad\n")
     
     # =============================================================================
     # Performance Comparison Table
@@ -1154,17 +1234,60 @@ if __name__ == '__main__':
     # Default is 'constant' to match previous behavior
     # User can change this to 'square', 'sine', 'cosine', or 'hybridsig' to test dynamic tracking
     
+    # =========================================================================
+    # ENVIRONMENTAL DISTURBANCE CONFIGURATION
+    # =========================================================================
+    # The disturbance suite provides stochastic modeling of:
+    #   - Dryden/von Kármán wind turbulence (MIL-F-8785C compliant)
+    #   - PSD-based structural vibration (modal superposition)
+    #   - Broadband structural noise
+    #
+    # Example disturbance configuration:
+    example_disturbance_config = {
+        'wind': {
+            'enabled': True,
+            'scale_length': 200.0,        # Turbulence scale L_u [m] (MIL-F-8785C)
+            'turbulence_intensity': 0.15, # σ_u/V_mean ratio (0.1=light, 0.2=moderate)
+            'mean_velocity': 8.0,         # Mean wind speed V_mean [m/s]
+            'direction_deg': 45.0,        # Wind direction (affects both axes)
+            'start_time': 2.0             # Delay onset [s]
+        },
+        'vibration': {
+            'enabled': True,
+            'modal_frequencies': [15.0, 45.0, 80.0],  # Structural modes [Hz]
+            'modal_dampings': [0.02, 0.015, 0.01],    # Low damping typical
+            'modal_amplitudes': [1e-3, 5e-4, 2e-4],   # PSD amplitudes [(m/s²)²/Hz]
+            'inertia_coupling': 0.1,                  # Accel→torque [N·m/(m/s²)]
+            'start_time': 0.0
+        },
+        'structural_noise': {
+            'enabled': True,
+            'std': 0.005,        # Noise intensity σ [N·m]
+            'freq_low': 100.0,   # Lower cutoff [Hz]
+            'freq_high': 500.0   # Upper cutoff [Hz]
+        },
+        'seed': 42  # Reproducibility
+    }
+    
+    # =========================================================================
+    # RUN OPTIONS
+    # =========================================================================
+    
     # 1. Constant Target (Legacy)
-    #run_three_way_comparison(signal_type='constant')
+    # run_three_way_comparison(signal_type='constant')
     
     # 2. Square Wave Target
-    #run_three_way_comparison(signal_type='square')
+    # run_three_way_comparison(signal_type='square')
     
     # 3. Sine Wave Target
-    #run_three_way_comparison(signal_type='sine')
+    # run_three_way_comparison(signal_type='sine')
     
     # 4. Cosine Wave Target
-    #run_three_way_comparison(signal_type='cosine')
+    # run_three_way_comparison(signal_type='cosine')
     
     # 5. Hybrid Signal (Sine wave until reach angle, then hold)
     run_three_way_comparison(signal_type='hybridsig')
+    
+    # 6. With Environmental Disturbances - demonstrates NDOB rejection capability
+    # Uncomment below to test with Dryden wind + structural vibration:
+    # run_three_way_comparison(signal_type='hybridsig', disturbance_config=example_disturbance_config)
