@@ -60,6 +60,15 @@ from lasercom_digital_twin.core.controllers.fsm_pid_control import (
 )
 from lasercom_digital_twin.core.n_dist_observer import create_ndob_from_config
 
+# Environmental disturbance models (wind, vibration, structural noise)
+from lasercom_digital_twin.core.disturbances import (
+    EnvironmentalDisturbances,
+    EnvironmentalDisturbanceConfig,
+    DrydenWindConfig,
+    StructuralVibrationConfig,
+    DisturbanceState
+)
+
 
 @dataclass
 class SimulationConfig:
@@ -130,6 +139,43 @@ class SimulationConfig:
         'lambda_el': 40.0,             # Observer bandwidth El [rad/s]
         'd_max': 5.0                   # Max disturbance estimate [N·m]
     })
+    
+    # Environmental Disturbance configuration (Wind, Vibration, Structural Noise)
+    # These disturbances are injected into the PLANT ONLY, not the controller model.
+    # This creates plant-model dissonance that the NDOB must estimate/compensate.
+    environmental_disturbance_enabled: bool = False
+    environmental_disturbance_config: Dict = field(default_factory=lambda: {
+        'seed': 42,
+        # Dryden Wind Turbulence Model
+        'wind': {
+            'enabled': False,
+            'start_time': 2.0,             # [s] When to start wind injection
+            'mean_velocity': 5.0,          # [m/s] Steady wind speed
+            'turbulence_intensity': 0.15,  # σ/V ratio (0.1=light, 0.2=moderate)
+            'scale_length': 200.0,         # [m] Turbulence scale (200m low alt)
+            'direction_deg': 45.0,         # Wind direction (affects Az/El split)
+            'gimbal_area': 0.02,           # [m²] Exposed area
+            'gimbal_arm': 0.15,            # [m] Moment arm
+            'drag_coefficient': 1.2,       # Cd for flat surfaces
+        },
+        # PSD-Based Structural Vibration Model
+        'vibration': {
+            'enabled': False,
+            'start_time': 0.0,             # [s] When to start vibration
+            'modal_frequencies': [15.0, 45.0, 80.0],  # [Hz] Structural mode frequencies
+            'modal_dampings': [0.02, 0.015, 0.01],    # Modal damping ratios
+            'modal_amplitudes': [1e-3, 5e-4, 2e-4],   # [(m/s²)²/Hz] PSD amplitudes
+            'inertia_coupling': 0.1,       # [N·m/(m/s²)] Base accel → torque
+            'noise_floor_psd': 1e-6,       # [(m/s²)²/Hz] Broadband floor
+        },
+        # High-Frequency Structural Noise
+        'structural_noise': {
+            'enabled': False,
+            'std': 0.005,                  # [N·m] Noise RMS
+            'freq_low': 100.0,             # [Hz] Lower bound
+            'freq_high': 500.0,            # [Hz] Upper bound
+        }
+    })
 
 
 @dataclass
@@ -184,6 +230,14 @@ class SimulationState:
     d_hat_ndob_az: float = 0.0     # Estimated disturbance Az [N·m]
     d_hat_ndob_el: float = 0.0     # Estimated disturbance El [N·m]
     ndob_velocity_clipped: bool = False  # NDOB velocity clipping status
+    
+    # Environmental disturbance (injected into plant only)
+    tau_disturbance_az: float = 0.0  # Environmental disturbance torque Az [N·m]
+    tau_disturbance_el: float = 0.0  # Environmental disturbance torque El [N·m]
+    wind_torque_az: float = 0.0      # Wind component [N·m]
+    wind_torque_el: float = 0.0      # Wind component [N·m]
+    vibration_torque_az: float = 0.0 # Vibration component [N·m]
+    vibration_torque_el: float = 0.0 # Vibration component [N·m]
     
     # EKF Diagnostics (covariance, innovation, adaptive tuning)
     ekf_cov_theta_az: float = 0.0         # State covariance P[0,0] (θ_Az) [rad²]
@@ -321,6 +375,9 @@ class DigitalTwinRunner:
         
         # Initialize controllers
         self._init_controllers()
+        
+        # Initialize environmental disturbances (plant-only, not in controller model)
+        self._init_disturbances()
         
         # Initialize data logging
         self._init_logging()
@@ -611,6 +668,87 @@ class DigitalTwinRunner:
         }
         self.fsm_controller = FSMController(fsm_controller_config)
     
+    def _init_disturbances(self) -> None:
+        """
+        Initialize environmental disturbance generator.
+        
+        Creates the disturbance models (wind, vibration, structural noise) that
+        are injected into the PLANT ONLY. The controller model (used by FBL/NDOB)
+        does not see these disturbances directly - the NDOB must estimate them.
+        
+        This creates plant-model dissonance for realistic NDOB testing.
+        """
+        self.env_disturbances: Optional[EnvironmentalDisturbances] = None
+        self._disturbance_state: Optional[DisturbanceState] = None
+        
+        if not self.config.environmental_disturbance_enabled:
+            return
+            
+        # Build EnvironmentalDisturbanceConfig from config dict
+        cfg = self.config.environmental_disturbance_config
+        
+        # Wind configuration
+        wind_cfg = cfg.get('wind', {})
+        wind_config = DrydenWindConfig(
+            enabled=wind_cfg.get('enabled', False),
+            start_time=wind_cfg.get('start_time', 0.0),
+            mean_velocity=wind_cfg.get('mean_velocity', 5.0),
+            turbulence_intensity=wind_cfg.get('turbulence_intensity', 0.15),
+            scale_length=wind_cfg.get('scale_length', 200.0),
+            direction_deg=wind_cfg.get('direction_deg', 45.0),
+            gimbal_area=wind_cfg.get('gimbal_area', 0.02),
+            gimbal_arm=wind_cfg.get('gimbal_arm', 0.15),
+            drag_coefficient=wind_cfg.get('drag_coefficient', 1.2),
+            air_density=wind_cfg.get('air_density', 1.225),
+            correlation_time=wind_cfg.get('correlation_time', 0.0)
+        )
+        
+        # Vibration configuration
+        vib_cfg = cfg.get('vibration', {})
+        vibration_config = StructuralVibrationConfig(
+            enabled=vib_cfg.get('enabled', False),
+            start_time=vib_cfg.get('start_time', 0.0),
+            modal_frequencies=vib_cfg.get('modal_frequencies', [15.0, 45.0, 80.0]),
+            modal_dampings=vib_cfg.get('modal_dampings', [0.02, 0.015, 0.01]),
+            modal_amplitudes=vib_cfg.get('modal_amplitudes', [1e-3, 5e-4, 2e-4]),
+            inertia_coupling=vib_cfg.get('inertia_coupling', 0.1),
+            noise_floor_psd=vib_cfg.get('noise_floor_psd', 1e-6)
+        )
+        
+        # Structural noise configuration
+        struct_cfg = cfg.get('structural_noise', {})
+        
+        # Create master config
+        disturbance_config = EnvironmentalDisturbanceConfig(
+            enabled=True,
+            seed=cfg.get('seed', self.config.seed),
+            wind=wind_config,
+            vibration=vibration_config,
+            structural_noise_enabled=struct_cfg.get('enabled', False),
+            structural_noise_std=struct_cfg.get('std', 0.005),
+            structural_noise_freq_low=struct_cfg.get('freq_low', 100.0),
+            structural_noise_freq_high=struct_cfg.get('freq_high', 500.0)
+        )
+        
+        # Create disturbance generator
+        self.env_disturbances = EnvironmentalDisturbances(
+            disturbance_config, 
+            dt=self.config.dt_sim
+        )
+        
+        # Print configuration summary
+        stats = self.env_disturbances.get_statistics()
+        print("INFO: Environmental disturbances initialized:")
+        if wind_config.enabled:
+            print(f"      Wind: V_mean={wind_config.mean_velocity:.1f} m/s, "
+                  f"I={wind_config.turbulence_intensity:.2f}, "
+                  f"start={wind_config.start_time:.1f}s")
+        if vibration_config.enabled:
+            print(f"      Vibration: modes={vibration_config.modal_frequencies} Hz, "
+                  f"start={vibration_config.start_time:.1f}s")
+        if struct_cfg.get('enabled', False):
+            print(f"      Structural noise: σ={struct_cfg.get('std', 0.005):.4f} N·m")
+    
     def _init_logging(self) -> None:
         """Initialize data logging infrastructure."""
         self.log_data: Dict[str, List] = defaultdict(list)
@@ -641,7 +779,11 @@ class DigitalTwinRunner:
             'pid_u_p_az', 'pid_u_p_el',
             'pid_u_i_az', 'pid_u_i_el',
             'pid_u_d_az', 'pid_u_d_el',
-            'pid_saturated_az', 'pid_saturated_el'
+            'pid_saturated_az', 'pid_saturated_el',
+            # Environmental disturbances (injected into plant)
+            'tau_disturbance_az', 'tau_disturbance_el',
+            'wind_torque_az', 'wind_torque_el',
+            'vibration_torque_az', 'vibration_torque_el'
         ]
     
     def _step_dynamics(self, dt: float) -> None:
@@ -696,25 +838,48 @@ class DigitalTwinRunner:
             # -----------------------------------------------------------
             # High-Fidelity Coupled Dynamics (Lagrangian Formulation)
             # -----------------------------------------------------------
-            # Solves: M(q)q̈ + C(q,q̇)q̇ + G(q) = τ_net
-            # where τ_net = τ_motor - D·q̇ (Friction)
+            # Solves: M(q)q̈ + C(q,q̇)q̇ + G(q) = τ_control + τ_disturbance
+            # where τ_net = τ_motor - D·q̇ (Friction) + τ_disturbance (environmental)
 
             # 1. State Vectors
             q = np.array([self.q_az, self.q_el])
             dq = np.array([self.qd_az, self.qd_el])
             
-            # 2. Input Torques (with Friction Compensation)
+            # 2. Environmental Disturbance Injection (PLANT ONLY)
+            # These disturbances exist only in the simulation, not in the controller model.
+            # The NDOB must estimate and compensate for them.
+            tau_disturbance = np.array([0.0, 0.0])
+            if self.env_disturbances is not None:
+                self._disturbance_state = self.env_disturbances.step(
+                    t=self.time,
+                    gimbal_az=self.q_az,
+                    gimbal_el=self.q_el,
+                    gimbal_vel_az=self.qd_az,
+                    gimbal_vel_el=self.qd_el
+                )
+                tau_disturbance[0] = self._disturbance_state.total_torque_az
+                tau_disturbance[1] = self._disturbance_state.total_torque_el
+                
+                # Update state for logging
+                self.state.tau_disturbance_az = self._disturbance_state.total_torque_az
+                self.state.tau_disturbance_el = self._disturbance_state.total_torque_el
+                self.state.wind_torque_az = self._disturbance_state.wind_torque_az
+                self.state.wind_torque_el = self._disturbance_state.wind_torque_el
+                self.state.vibration_torque_az = self._disturbance_state.vibration_torque_az
+                self.state.vibration_torque_el = self._disturbance_state.vibration_torque_el
+            
+            # 3. Input Torques (with Friction Compensation)
             # GimbalDynamics expects the net torque (or handles G internally? No, G is in LHS)
             # compute_forward_dynamics solves M*qdd = tau - C*dq - G
-            # We supply tau = tau_motor - Friction
+            # We supply tau = tau_motor - Friction + tau_disturbance
             tau_motor = np.array([self.state.torque_az, self.state.torque_el])
             tau_friction = np.array([
                 self.friction_az * self.qd_az,
                 self.friction_el * self.qd_el
             ])
-            tau_net = tau_motor - tau_friction
+            tau_net = tau_motor - tau_friction + tau_disturbance
 
-            # 3. Compute Accelerations via Inverted Mass Matrix
+            # 4. Compute Accelerations via Inverted Mass Matrix
             # q̈ = M⁻¹(τ_net - C·q̇ - G)
             # Use dynamics_sim instance which has plant/model mismatch for realism
             # NDOB and FBL use self.dynamics (nominal model) while plant uses dynamics_sim
@@ -1271,6 +1436,14 @@ class DigitalTwinRunner:
             
             # NDOB velocity clipping status (for diagnostics)
             self.log_data['ndob_velocity_clipped'].append(bool(self.state.ndob_velocity_clipped))
+            
+            # Environmental disturbance signals (injected into plant only)
+            self.log_data['tau_disturbance_az'].append(float(self.state.tau_disturbance_az))
+            self.log_data['tau_disturbance_el'].append(float(self.state.tau_disturbance_el))
+            self.log_data['wind_torque_az'].append(float(self.state.wind_torque_az))
+            self.log_data['wind_torque_el'].append(float(self.state.wind_torque_el))
+            self.log_data['vibration_torque_az'].append(float(self.state.vibration_torque_az))
+            self.log_data['vibration_torque_el'].append(float(self.state.vibration_torque_el))
             
             # Virtual control signal v (outer loop commanded acceleration)
             v_sig = self.last_coarse_meta.get('v_signal', np.zeros(2))
