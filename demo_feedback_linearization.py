@@ -261,9 +261,9 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
         error_az_fbl = np.abs(results_fbl['log_arrays']['q_az'] - target_az_rad)
         error_az_ndob = np.abs(results_ndob['log_arrays']['q_az'] - target_az_rad)
 
-    ax2a.plot(t_pid, np.rad2deg(error_az_pid), color=COLOR_PID, linewidth=1.5, label='PID', alpha=0.9)
-    ax2a.plot(t_fbl, np.rad2deg(error_az_fbl), color=COLOR_FBL, linewidth=1.5, label='FBL', alpha=0.9)
-    ax2a.plot(t_ndob, np.rad2deg(error_az_ndob), color=COLOR_NDOB, linewidth=1.5, label='FBL+NDOB', alpha=0.9)
+    ax2a.plot(t_pid, np.rad2deg(error_az_pid), color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
+    ax2a.plot(t_fbl, np.rad2deg(error_az_fbl), color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
+    ax2a.plot(t_ndob, np.rad2deg(error_az_ndob), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
 
     # Critical handover thresholds (FSM engagement at 0.8°)
     ax2a.axhline(0.8, color='orange', linewidth=1.5, linestyle=':', 
@@ -287,9 +287,9 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
         error_el_fbl = np.abs(results_fbl['log_arrays']['q_el'] - target_el_rad)
         error_el_ndob = np.abs(results_ndob['log_arrays']['q_el'] - target_el_rad)
 
-    ax2b.plot(t_pid, np.rad2deg(error_el_pid), color=COLOR_PID, linewidth=1.5, label='PID', alpha=0.9)
-    ax2b.plot(t_fbl, np.rad2deg(error_el_fbl), color=COLOR_FBL, linewidth=1.5, label='FBL', alpha=0.9)
-    ax2b.plot(t_ndob, np.rad2deg(error_el_ndob), color=COLOR_NDOB, linewidth=1.5, label='FBL+NDOB', alpha=0.9)
+    ax2b.plot(t_pid, np.rad2deg(error_el_pid), color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
+    ax2b.plot(t_fbl, np.rad2deg(error_el_fbl), color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
+    ax2b.plot(t_ndob, np.rad2deg(error_el_ndob), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
 
     ax2b.axhline(0.8, color='orange', linewidth=1.5, linestyle=':', 
                  alpha=0.6, label='FSM Handover (0.8°)')
@@ -316,9 +316,9 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     tau_min = -0.0
     
     # Azimuth Torque
-    ax3a.plot(t_pid, results_pid['log_arrays']['torque_az'], color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax3a.plot(t_fbl, results_fbl['log_arrays']['torque_az'], color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax3a.plot(t_ndob, results_ndob['log_arrays']['torque_az'], color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
+    ax3a.plot(t_pid, results_pid['log_arrays']['torque_az'], color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
+    ax3a.plot(t_fbl, results_fbl['log_arrays']['torque_az'], color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
+    ax3a.plot(t_ndob, results_ndob['log_arrays']['torque_az'], color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
     ax3a.axhline(tau_max, color='red', linewidth=1, linestyle=':', 
                  alpha=0.6, label='Saturation Limit')
     ax3a.axhline(tau_min, color='red', linewidth=1, linestyle=':', alpha=0.6)
@@ -329,9 +329,9 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax3a.grid(True, alpha=0.3, linestyle=':')
     
     # Elevation Torque
-    ax3b.plot(t_pid, results_pid['log_arrays']['torque_el'], color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax3b.plot(t_fbl, results_fbl['log_arrays']['torque_el'], color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax3b.plot(t_ndob, results_ndob['log_arrays']['torque_el'], color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
+    ax3b.plot(t_pid, results_pid['log_arrays']['torque_el'], color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
+    ax3b.plot(t_fbl, results_fbl['log_arrays']['torque_el'], color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
+    ax3b.plot(t_ndob, results_ndob['log_arrays']['torque_el'], color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
     ax3b.axhline(tau_max, color='red', linewidth=1, linestyle=':', 
                  alpha=0.6, label='Saturation Limit')
     ax3b.axhline(tau_min, color='red', linewidth=1, linestyle=':', alpha=0.6)
@@ -349,9 +349,9 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
         dq_az = results_ndob['log_arrays']['qd_az']
         d_true_az = friction_coef * dq_az
         
-        ax3c.plot(t_ndob, d_hat_az, color=COLOR_NDOB, linewidth=1, label='NDOB Estimate', alpha=0.9)
-        ax3c.plot(t_ndob, d_true_az, color='purple', linewidth=1, linestyle='--', label='Ground Truth (Friction)', alpha=0.7)
-        ax3c.axhline(0, color='black', linewidth=1, linestyle='--', alpha=0.5)
+        ax3c.plot(t_ndob, d_hat_az, color=COLOR_NDOB, linewidth=2, label='NDOB Estimate', alpha=0.9)
+        ax3c.plot(t_ndob, d_true_az, color='purple', linewidth=2, linestyle='--', label='Ground Truth (Friction)', alpha=0.7)
+        ax3c.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
         ax3c.set_ylabel('Disturbance [N·m]', fontsize=11, fontweight='bold')
         ax3c.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
         ax3c.set_title('Azimuth Disturbance Estimation Accuracy', fontsize=12, fontweight='bold')
@@ -368,9 +368,9 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
         dq_el = results_ndob['log_arrays']['qd_el']
         d_true_el = friction_coef * dq_el
         
-        ax3d.plot(t_ndob, d_hat_el, color=COLOR_NDOB, linewidth=1, label='NDOB Estimate', alpha=0.9)
-        ax3d.plot(t_ndob, d_true_el, color='purple', linewidth=1, linestyle='--', label='Ground Truth (Friction)', alpha=0.7)
-        ax3d.axhline(0, color='black', linewidth=1, linestyle='--', alpha=0.5)
+        ax3d.plot(t_ndob, d_hat_el, color=COLOR_NDOB, linewidth=2, label='NDOB Estimate', alpha=0.9)
+        ax3d.plot(t_ndob, d_true_el, color='purple', linewidth=2, linestyle='--', label='Ground Truth (Friction)', alpha=0.7)
+        ax3d.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
         ax3d.set_ylabel('Disturbance [N·m]', fontsize=11, fontweight='bold')
         ax3d.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
         ax3d.set_title('Elevation Disturbance Estimation Accuracy', fontsize=12, fontweight='bold')
@@ -389,20 +389,20 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     fig4, (ax4a, ax4b) = plt.subplots(2, 1, figsize=(10, 7), sharex=True, constrained_layout=True)
     
     # Azimuth Velocity
-    ax4a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['qd_az']), color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax4a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['qd_az']), color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax4a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['qd_az']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
-    ax4a.axhline(0, color='black', linewidth=1, linestyle='--', alpha=0.5)
+    ax4a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['qd_az']), color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
+    ax4a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['qd_az']), color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
+    ax4a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['qd_az']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
+    ax4a.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
     ax4a.set_ylabel('Azimuth Rate [deg/s]', fontsize=11, fontweight='bold')
     ax4a.set_title('Gimbal Azimuth Velocity', fontsize=12, fontweight='bold')
     ax4a.legend(loc='best', fontsize=9)
     ax4a.grid(True, alpha=0.3, linestyle=':')
     
     # Elevation Velocity
-    ax4b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['qd_el']), color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax4b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['qd_el']), color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax4b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['qd_el']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
-    ax4b.axhline(0, color='black', linewidth=1, linestyle='--', alpha=0.5)
+    ax4b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['qd_el']), color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
+    ax4b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['qd_el']), color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
+    ax4b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['qd_el']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
+    ax4b.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
     ax4b.set_ylabel('Elevation Rate [deg/s]', fontsize=11, fontweight='bold')
     ax4b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
     ax4b.set_title('Gimbal Elevation Velocity', fontsize=12, fontweight='bold')
@@ -420,13 +420,13 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     # Azimuth Phase Plane
     ax5a.plot(np.rad2deg(results_pid['log_arrays']['q_az']), 
               np.rad2deg(results_pid['log_arrays']['qd_az']), 
-              color=COLOR_PID, linewidth=1, label='PID', alpha=0.7)
+              color=COLOR_PID, linewidth=2, label='PID', alpha=0.7)
     ax5a.plot(np.rad2deg(results_fbl['log_arrays']['q_az']), 
               np.rad2deg(results_fbl['log_arrays']['qd_az']), 
-              color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.7)
+              color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.7)
     ax5a.plot(np.rad2deg(results_ndob['log_arrays']['q_az']), 
               np.rad2deg(results_ndob['log_arrays']['qd_az']), 
-              color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.7)
+              color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.7)
     ax5a.set_xlabel('Az Angle [deg]', fontsize=11, fontweight='bold')
     ax5a.set_ylabel('Az Rate [deg/s]', fontsize=11, fontweight='bold')
     ax5a.set_title('Az Phase Plane', fontsize=12, fontweight='bold')
@@ -436,13 +436,13 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     # Elevation Phase Plane
     ax5b.plot(np.rad2deg(results_pid['log_arrays']['q_el']), 
               np.rad2deg(results_pid['log_arrays']['qd_el']), 
-              color=COLOR_PID, linewidth=1, label='PID', alpha=0.7)
+              color=COLOR_PID, linewidth=2, label='PID', alpha=0.7)
     ax5b.plot(np.rad2deg(results_fbl['log_arrays']['q_el']), 
               np.rad2deg(results_fbl['log_arrays']['qd_el']), 
-              color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.7)
+              color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.7)
     ax5b.plot(np.rad2deg(results_ndob['log_arrays']['q_el']), 
               np.rad2deg(results_ndob['log_arrays']['qd_el']), 
-              color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.7)
+              color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.7)
     ax5b.set_xlabel('El Angle [deg]', fontsize=11, fontweight='bold')
     ax5b.set_ylabel('El Rate [deg/s]', fontsize=11, fontweight='bold')
     ax5b.set_title('El Phase Plane', fontsize=12, fontweight='bold')
@@ -458,20 +458,20 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     fig6, (ax6a, ax6b, ax6c) = plt.subplots(3, 1, figsize=(10, 7), sharex=True, constrained_layout=True)
     
     # LOS Error X (Tip)
-    ax6a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['los_error_x']) , color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax6a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['los_error_x']), color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax6a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['los_error_x']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
-    ax6a.axhline(0, color='black', linewidth=1, linestyle='--', alpha=0.5)
+    ax6a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['los_error_x']) , color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
+    ax6a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['los_error_x']), color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
+    ax6a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['los_error_x']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
+    ax6a.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
     ax6a.set_ylabel('LOS Error X [deg]', fontsize=11, fontweight='bold')
     ax6a.set_title('Line-of-Sight Error X-Axis', fontsize=12, fontweight='bold')
     ax6a.legend(loc='best', fontsize=9)
     ax6a.grid(True, alpha=0.3, linestyle=':')
     
     # LOS Error Y (Tilt)
-    ax6b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['los_error_y']), color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax6b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['los_error_y']), color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax6b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['los_error_y']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
-    ax6b.axhline(0, color='black', linewidth=1, linestyle='--', alpha=0.5)
+    ax6b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['los_error_y']), color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
+    ax6b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['los_error_y']), color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
+    ax6b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['los_error_y']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
+    ax6b.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
     ax6b.set_ylabel('LOS Error Y [deg]', fontsize=11, fontweight='bold')
     ax6b.set_title('Line-of-Sight Error Y-Axis', fontsize=12, fontweight='bold')
     ax6b.legend(loc='best', fontsize=9)
@@ -482,10 +482,10 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     los_total_fbl = np.rad2deg(np.sqrt(results_fbl['log_arrays']['los_error_x']**2 + results_fbl['log_arrays']['los_error_y']**2)) 
     los_total_ndob = np.rad2deg(np.sqrt(results_ndob['log_arrays']['los_error_x']**2 + results_ndob['log_arrays']['los_error_y']**2)) 
     
-    ax6c.plot(t_pid, los_total_pid, color=COLOR_PID, linewidth=1, label='PID', alpha=0.9)
-    ax6c.plot(t_fbl, los_total_fbl, color=COLOR_FBL, linewidth=1, label='FBL', alpha=0.9)
-    ax6c.plot(t_ndob, los_total_ndob, color=COLOR_NDOB, linewidth=1, label='FBL+NDOB', alpha=0.9)
-    ax6c.axhline(0, color='black', linewidth=1, linestyle='--', alpha=0.5)
+    ax6c.plot(t_pid, los_total_pid, color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
+    ax6c.plot(t_fbl, los_total_fbl, color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
+    ax6c.plot(t_ndob, los_total_ndob, color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
+    ax6c.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
     ax6c.set_ylabel('Total LOS Error [deg]', fontsize=11, fontweight='bold')
     ax6c.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
     ax6c.set_title('Total Line-of-Sight Error Magnitude', fontsize=12, fontweight='bold')
@@ -870,11 +870,12 @@ def run_three_way_comparison(signal_type='constant'):
     # Common test parameters
     target_az_deg = 0
     target_el_deg = 0
-    duration = 2.5  # Increased to show full wave periods
+    duration = 10 # Increased to show full wave periods
     
     # Signal characteristics
     target_amplitude = 90.0 # degrees
-    target_period = 5   # seconds
+    target_period = 20   # seconds
+    target_reachangle = 90.0  # degrees - for hybridsig only
     
     print(f"Test Conditions:")
     print(f"  - Target Base: Az={target_az_deg:.1f}°, El={target_el_deg:.1f}°")
@@ -882,6 +883,8 @@ def run_three_way_comparison(signal_type='constant'):
     if signal_type != 'constant':
         print(f"  - Amplitude: ±{target_amplitude:.1f}°")
         print(f"  - Period: {target_period:.1f} seconds")
+    if signal_type == 'hybridsig':
+        print(f"  - Reach Angle: {target_reachangle:.1f}° (hold after reaching)")
     print(f"  - Duration: {duration:.1f} seconds")
     print(f"  - Initial: [0°, 0°]")
     print(f"  - Friction: Az=0.1 Nm/(rad/s), El=0.1 Nm/(rad/s)")
@@ -906,6 +909,7 @@ def run_three_way_comparison(signal_type='constant'):
         target_type=signal_type,
         target_amplitude=target_amplitude,
         target_period=target_period,
+        target_reachangle=target_reachangle,  # For hybridsig: angle to hold after reaching
         use_feedback_linearization=False,  # Standard PID
         dynamics_config={
             'pan_mass': 1,
@@ -951,6 +955,7 @@ def run_three_way_comparison(signal_type='constant'):
         target_type=signal_type,
         target_amplitude=target_amplitude,
         target_period=target_period,
+        target_reachangle=target_reachangle,  # For hybridsig: angle to hold after reaching
         use_feedback_linearization=True,  # FL mode
         use_direct_state_feedback=False,   # Bypass EKF for cleaner controller testing
         enable_visualization=False,
@@ -972,7 +977,7 @@ def run_three_way_comparison(signal_type='constant'):
             'kp': [400.0, 400.0],    # Position gain [1/s²]
             'kd': [40.0, 40.0],      # Velocity gain [1/s] - critically damped
             'ki': [50.0, 50.0],      # Integral for residual disturbances
-            'enable_integral': True,  # ENABLE for steady-state performance
+            'enable_integral': False,  # ENABLE for steady-state performance
             'tau_max': [10.0, 10.0],
             'tau_min': [-10.0, -10.0],
             # Friction feedforward - ENABLE for fair comparison
@@ -1061,6 +1066,7 @@ def run_three_way_comparison(signal_type='constant'):
     
     # Disable integral action - NDOB handles steady-state error
     config_ndob.feedback_linearization_config['enable_integral'] = False
+    config_ndob.feedback_linearization_config['enable_disturbance_compensation'] = False
     
     print(f"DEBUG: friction_az = {config_ndob.feedback_linearization_config['friction_az']}")
     print(f"DEBUG: friction_el = {config_ndob.feedback_linearization_config['friction_el']}")
@@ -1144,19 +1150,21 @@ def run_three_way_comparison(signal_type='constant'):
 
 
 if __name__ == '__main__':
-    # Available signal types: 'constant', 'square', 'sine', 'cosine'
+    # Available signal types: 'constant', 'square', 'sine', 'cosine', 'hybridsig'
     # Default is 'constant' to match previous behavior
-    # User can change this to 'square', 'sine', or 'cosine' to test dynamic tracking
+    # User can change this to 'square', 'sine', 'cosine', or 'hybridsig' to test dynamic tracking
     
     # 1. Constant Target (Legacy)
     #run_three_way_comparison(signal_type='constant')
     
-    # 2. Square Wave Target (Requested)
-    
+    # 2. Square Wave Target
     #run_three_way_comparison(signal_type='square')
     
     # 3. Sine Wave Target
-   run_three_way_comparison(signal_type='sine')
+    #run_three_way_comparison(signal_type='sine')
     
     # 4. Cosine Wave Target
     #run_three_way_comparison(signal_type='cosine')
+    
+    # 5. Hybrid Signal (Sine wave until reach angle, then hold)
+    run_three_way_comparison(signal_type='hybridsig')

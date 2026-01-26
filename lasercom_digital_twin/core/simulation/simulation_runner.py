@@ -87,9 +87,10 @@ class SimulationConfig:
     target_az: float = 0.0         # Target azimuth [rad]
     target_el: float = 0.5         # Target elevation [rad]
     target_enabled: bool = True
-    target_type: str = 'constant'  # 'constant', 'square', 'sine', 'cosine'
+    target_type: str = 'constant'  # 'constant', 'square', 'sine', 'cosine', 'hybridsig'
     target_amplitude: float = 1.0   # Amplitude for time-varying signals [deg]
     target_period: float = 2.0      # Period for time-varying signals [s]
+    target_reachangle: float = 45.0  # degrees - hold angle for hybridsig after reaching it
     
     # Controller selection
     use_feedback_linearization: bool = False  # Use FL controller instead of PID
@@ -290,8 +291,8 @@ class DigitalTwinRunner:
         # ALTERNATIVE: Mismatched model for robustness testing
         if(1):
             self.dynamics_sim = GimbalDynamics(
-             pan_mass=self.pan_mass+0.15,  # Slight mismatch for realism
-             tilt_mass=self.tilt_mass+0.15,
+             pan_mass=self.pan_mass+0.25,  # Slight mismatch for realism
+             tilt_mass=self.tilt_mass+0.25,
              cm_r=self.cm_r+0.002,
              cm_h=self.cm_h+0.005,
              gravity=self.gravity
@@ -1364,6 +1365,51 @@ class DigitalTwinRunner:
             val_ddot = -amp * omega * omega * np.cos(omega * t)
             self._target_accel_az = val_ddot
             self._target_accel_el = val_ddot
+            
+        elif self.config.target_type == 'hybridsig':
+            # Hybrid signal: sine wave until reach_angle, then hold constant
+            # Triggers when sine wave FIRST CROSSES reach angle while INCREASING
+            reach_angle_rad = np.deg2rad(self.config.target_reachangle)
+            
+            # Initialize hold flag and previous value if not exists
+            if not hasattr(self, '_hybridsig_hold'):
+                self._hybridsig_hold = False
+                self._hybridsig_prev_val = 0.0
+                
+            # Compute current sine wave value
+            val = amp * np.sin(omega * t)
+            
+            # Check if we've reached the target angle while increasing
+            # (first upward crossing of reach angle)
+            if not self._hybridsig_hold:
+                # Detect upward crossing: previous < reach_angle <= current
+                if (self._hybridsig_prev_val < reach_angle_rad and 
+                    val >= reach_angle_rad):
+                    self._hybridsig_hold = True
+                    self._hold_angle = reach_angle_rad
+                    print(f"[HYBRIDSIG] Reach angle {self.config.target_reachangle:.1f}° achieved at t={t:.3f}s, holding...")
+                self._hybridsig_prev_val = val
+                
+            if self._hybridsig_hold:
+                # Hold at reach angle - zero velocity and acceleration
+                self.config.target_az = base_az + self._hold_angle
+                self.config.target_el = base_el + self._hold_angle
+                self._target_vel_az = 0.0
+                self._target_vel_el = 0.0
+                self._target_accel_az = 0.0
+                self._target_accel_el = 0.0
+            else:
+                # Continue with sine wave
+                self.config.target_az = base_az + val
+                self.config.target_el = base_el + val
+                # Velocity: A * ω * cos(ωt)
+                val_dot = amp * omega * np.cos(omega * t)
+                self._target_vel_az = val_dot
+                self._target_vel_el = val_dot
+                # Acceleration: -A * ω² * sin(ωt)
+                val_ddot = -amp * omega * omega * np.sin(omega * t)
+                self._target_accel_az = val_ddot
+                self._target_accel_el = val_ddot
 
     def run_single_step(self) -> SimulationState:
         """
