@@ -35,8 +35,8 @@ def debug_ndob():
         enable_visualization=False,
         enable_plotting=False,
         dynamics_config={
-            'pan_mass': 0.5,
-            'tilt_mass': 0.25,
+            'pan_mass': 1,
+            'tilt_mass': 0.5,
             'cm_r': 0.0,
             'cm_h': 0.0,
             'gravity': 9.81
@@ -57,8 +57,8 @@ def debug_ndob():
         },
         ndob_config={
             'enable': True,
-            'lambda_az': 10.0,   # Very conservative
-            'lambda_el': 5.0,    # Even more conservative for lower inertia
+            'lambda_az': 100.0,   # Very conservative
+            'lambda_el': 100.0,    # Even more conservative for lower inertia
             'd_max': 0.1         # Limit to realistic friction level
         }
     )

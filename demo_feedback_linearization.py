@@ -45,7 +45,7 @@ import sys
 from pathlib import Path
 import matplotlib.pyplot as plt
 import matplotlib
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional, List
 
 # Configure matplotlib for publication-quality output
 matplotlib.rcParams['mathtext.fontset'] = 'stix'
@@ -64,6 +64,31 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lasercom_digital_twin.core.simulation.simulation_runner import (
     SimulationConfig,
     DigitalTwinRunner
+)
+
+# Frequency response analysis imports
+from lasercom_digital_twin.core.frequency_response import (
+    FrequencySweepEngine,
+    FrequencySweepConfig,
+    FrequencyResponseAnalyzer,
+    AnalyzerConfig,
+    FrequencyResponseData,
+    ControllerType,
+    FrequencyResponsePlotter,
+    PlotConfig,
+    PlotStyle,
+    FrequencyResponseLogger,
+    LoggerConfig,
+    SweepType
+)
+from lasercom_digital_twin.core.dynamics.gimbal_dynamics import GimbalDynamics
+from lasercom_digital_twin.core.controllers.control_laws import (
+    CoarseGimbalController,
+    FeedbackLinearizationController
+)
+from lasercom_digital_twin.core.n_dist_observer import (
+    NonlinearDisturbanceObserver,
+    NDOBConfig
 )
 
 
@@ -218,9 +243,9 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
         ax1a.plot(t_pid, np.full_like(t_pid, target_az_deg), 
                   color=color_cmd, linewidth=2, linestyle='--', label='Command', alpha=0.7)
     
-    ax1a.set_ylabel('Azimuth Angle [deg]', fontsize=11, fontweight='bold')
-    ax1a.set_title('Gimbal Azimuth Position', fontsize=12, fontweight='bold')
-    ax1a.legend(loc='best', fontsize=9)
+    ax1a.set_ylabel('Azimuth Angle [deg]', fontsize=14, fontweight='bold')
+    ax1a.set_title('Gimbal Azimuth Position', fontsize=14, fontweight='bold')
+    ax1a.legend(loc='best', fontsize=14)
     ax1a.grid(True, alpha=0.3, linestyle=':')
     
     # Elevation Position
@@ -237,10 +262,10 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     else:
         ax1b.plot(t_pid, np.full_like(t_pid, target_el_deg), 
                   color=color_cmd, linewidth=2, linestyle='--', label='Command', alpha=0.7)
-    ax1b.set_ylabel('Elevation Angle [deg]', fontsize=11, fontweight='bold')
-    ax1b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
-    ax1b.set_title('Gimbal Elevation Position', fontsize=12, fontweight='bold')
-    ax1b.legend(loc='best', fontsize=9)
+    ax1b.set_ylabel('Elevation Angle [deg]', fontsize=14, fontweight='bold')
+    ax1b.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
+    ax1b.set_title('Gimbal Elevation Position', fontsize=14, fontweight='bold')
+    ax1b.legend(loc='best', fontsize=14)
     ax1b.grid(True, alpha=0.3, linestyle=':')
     
     fig1.suptitle('Gimbal Position Tracking', fontsize=14, fontweight='bold')
@@ -266,14 +291,14 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax2a.plot(t_ndob, np.rad2deg(error_az_ndob), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
 
     # Critical handover thresholds (FSM engagement at 0.8°)
-    ax2a.axhline(0.8, color='orange', linewidth=1.5, linestyle=':', 
+    ax2a.axhline(0.8, color='orange', linewidth=2, linestyle=':', 
                  alpha=0.6, label='FSM Handover (0.8°)')
-    ax2a.axhline(1.0, color=COLOR_THRESHOLD, linewidth=1.5, linestyle=':', 
+    ax2a.axhline(1.0, color=COLOR_THRESHOLD, linewidth=2, linestyle=':', 
                  alpha=0.5, label='Performance Limit (1.0°)')
     
-    ax2a.set_ylabel('Azimuth Error [deg]', fontsize=11, fontweight='bold')
-    ax2a.set_title('Azimuth Tracking Error (with FSM Handover Threshold)', fontsize=12, fontweight='bold')
-    ax2a.legend(loc='best', fontsize=9)
+    ax2a.set_ylabel('Azimuth Error [deg]', fontsize=14, fontweight='bold')
+    ax2a.set_title('Azimuth Tracking Error (with FSM Handover Threshold)', fontsize=14, fontweight='bold')
+    ax2a.legend(loc='best', fontsize=14)
     ax2a.grid(True, alpha=0.3, linestyle=':')
     ax2a.set_yscale('log')
     
@@ -291,15 +316,15 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax2b.plot(t_fbl, np.rad2deg(error_el_fbl), color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
     ax2b.plot(t_ndob, np.rad2deg(error_el_ndob), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
 
-    ax2b.axhline(0.8, color='orange', linewidth=1.5, linestyle=':', 
+    ax2b.axhline(0.8, color='orange', linewidth=2, linestyle=':', 
                  alpha=0.6, label='FSM Handover (0.8°)')
-    ax2b.axhline(1.0, color=COLOR_THRESHOLD, linewidth=1.5, linestyle=':', 
+    ax2b.axhline(1.0, color=COLOR_THRESHOLD, linewidth=2, linestyle=':', 
                  alpha=0.5, label='Performance Limit (1.0°)')
     
-    ax2b.set_ylabel('Elevation Error [deg]', fontsize=11, fontweight='bold')
-    ax2b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
-    ax2b.set_title('Elevation Tracking Error (with FSM Handover Threshold)', fontsize=12, fontweight='bold')
-    ax2b.legend(loc='best', fontsize=9)
+    ax2b.set_ylabel('Elevation Error [deg]', fontsize=14, fontweight='bold')
+    ax2b.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
+    ax2b.set_title('Elevation Tracking Error (with FSM Handover Threshold)', fontsize=14, fontweight='bold')
+    ax2b.legend(loc='best', fontsize=14)
     ax2b.grid(True, alpha=0.3, linestyle=':')
     ax2b.set_yscale('log')
     
@@ -319,26 +344,26 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax3a.plot(t_pid, results_pid['log_arrays']['torque_az'], color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
     ax3a.plot(t_fbl, results_fbl['log_arrays']['torque_az'], color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
     ax3a.plot(t_ndob, results_ndob['log_arrays']['torque_az'], color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
-    ax3a.axhline(tau_max, color='red', linewidth=1, linestyle=':', 
+    ax3a.axhline(tau_max, color='red', linewidth=2, linestyle=':', 
                  alpha=0.6, label='Saturation Limit')
-    ax3a.axhline(tau_min, color='red', linewidth=1, linestyle=':', alpha=0.6)
-    ax3a.axhline(0, color='black', linewidth=1, linestyle='--', alpha=0.5)
-    ax3a.set_ylabel('Azimuth Torque [N·m]', fontsize=11, fontweight='bold')
-    ax3a.set_title('Azimuth Motor Control Effort', fontsize=12, fontweight='bold')
-    ax3a.legend(loc='best', fontsize=9)
+    ax3a.axhline(tau_min, color='red', linewidth=2, linestyle=':', alpha=0.6)
+    ax3a.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
+    ax3a.set_ylabel('Azimuth Torque [N·m]', fontsize=14, fontweight='bold')
+    ax3a.set_title('Azimuth Motor Control Effort', fontsize=14, fontweight='bold')
+    ax3a.legend(loc='best', fontsize=14)
     ax3a.grid(True, alpha=0.3, linestyle=':')
     
     # Elevation Torque
     ax3b.plot(t_pid, results_pid['log_arrays']['torque_el'], color=COLOR_PID, linewidth=2, label='PID', alpha=0.9)
     ax3b.plot(t_fbl, results_fbl['log_arrays']['torque_el'], color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
     ax3b.plot(t_ndob, results_ndob['log_arrays']['torque_el'], color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
-    ax3b.axhline(tau_max, color='red', linewidth=1, linestyle=':', 
+    ax3b.axhline(tau_max, color='red', linewidth=2, linestyle=':', 
                  alpha=0.6, label='Saturation Limit')
-    ax3b.axhline(tau_min, color='red', linewidth=1, linestyle=':', alpha=0.6)
-    ax3b.axhline(0, color='black', linewidth=1, linestyle='--', alpha=0.5)
-    ax3b.set_ylabel('Elevation Torque [N·m]', fontsize=11, fontweight='bold')
-    ax3b.set_title('Elevation Motor Control Effort', fontsize=12, fontweight='bold')
-    ax3b.legend(loc='best', fontsize=9)
+    ax3b.axhline(tau_min, color='red', linewidth=2, linestyle=':', alpha=0.6)
+    ax3b.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
+    ax3b.set_ylabel('Elevation Torque [N·m]', fontsize=14, fontweight='bold')
+    ax3b.set_title('Elevation Motor Control Effort', fontsize=14, fontweight='bold')
+    ax3b.legend(loc='best', fontsize=14)
     ax3b.grid(True, alpha=0.3, linestyle=':')
     
     # NDOB Disturbance Estimate - Azimuth (Ground Truth Comparison)
@@ -352,13 +377,13 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
         ax3c.plot(t_ndob, d_hat_az, color=COLOR_NDOB, linewidth=2, label='NDOB Estimate', alpha=0.9)
         ax3c.plot(t_ndob, d_true_az, color='purple', linewidth=2, linestyle='--', label='Ground Truth (Friction)', alpha=0.7)
         ax3c.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
-        ax3c.set_ylabel('Disturbance [N·m]', fontsize=11, fontweight='bold')
-        ax3c.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
-        ax3c.set_title('Azimuth Disturbance Estimation Accuracy', fontsize=12, fontweight='bold')
-        ax3c.legend(loc='best', fontsize=9)
+        ax3c.set_ylabel('Disturbance [N·m]', fontsize=14, fontweight='bold')
+        ax3c.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
+        ax3c.set_title('Azimuth Disturbance Estimation Accuracy', fontsize=14, fontweight='bold')
+        ax3c.legend(loc='best', fontsize=14)
         ax3c.grid(True, alpha=0.3, linestyle=':')
     else:
-        ax3c.text(0.5, 0.5, 'NDOB Not Enabled', ha='center', va='center', transform=ax3c.transAxes, fontsize=11)
+        ax3c.text(0.5, 0.5, 'NDOB Not Enabled', ha='center', va='center', transform=ax3c.transAxes, fontsize=14)
         ax3c.grid(True, alpha=0.3, linestyle=':')
     
     # NDOB Disturbance Estimate - Elevation
@@ -371,13 +396,13 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
         ax3d.plot(t_ndob, d_hat_el, color=COLOR_NDOB, linewidth=2, label='NDOB Estimate', alpha=0.9)
         ax3d.plot(t_ndob, d_true_el, color='purple', linewidth=2, linestyle='--', label='Ground Truth (Friction)', alpha=0.7)
         ax3d.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
-        ax3d.set_ylabel('Disturbance [N·m]', fontsize=11, fontweight='bold')
-        ax3d.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
-        ax3d.set_title('Elevation Disturbance Estimation Accuracy', fontsize=12, fontweight='bold')
-        ax3d.legend(loc='best', fontsize=9)
+        ax3d.set_ylabel('Disturbance [N·m]', fontsize=14, fontweight='bold')
+        ax3d.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
+        ax3d.set_title('Elevation Disturbance Estimation Accuracy', fontsize=14, fontweight='bold')
+        ax3d.legend(loc='best', fontsize=14)
         ax3d.grid(True, alpha=0.3, linestyle=':')
     else:
-        ax3d.text(0.5, 0.5, 'NDOB Not Enabled', ha='center', va='center', transform=ax3d.transAxes, fontsize=11)
+        ax3d.text(0.5, 0.5, 'NDOB Not Enabled', ha='center', va='center', transform=ax3d.transAxes, fontsize=14)
         ax3d.grid(True, alpha=0.3, linestyle=':')
     
     fig3.suptitle('Motor Control Torques', fontsize=14, fontweight='bold')
@@ -393,9 +418,9 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax4a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['qd_az']), color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
     ax4a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['qd_az']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
     ax4a.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
-    ax4a.set_ylabel('Azimuth Rate [deg/s]', fontsize=11, fontweight='bold')
-    ax4a.set_title('Gimbal Azimuth Velocity', fontsize=12, fontweight='bold')
-    ax4a.legend(loc='best', fontsize=9)
+    ax4a.set_ylabel('Azimuth Rate [deg/s]', fontsize=14, fontweight='bold')
+    ax4a.set_title('Gimbal Azimuth Velocity', fontsize=14, fontweight='bold')
+    ax4a.legend(loc='best', fontsize=14)
     ax4a.grid(True, alpha=0.3, linestyle=':')
     
     # Elevation Velocity
@@ -403,10 +428,10 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax4b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['qd_el']), color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
     ax4b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['qd_el']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
     ax4b.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
-    ax4b.set_ylabel('Elevation Rate [deg/s]', fontsize=11, fontweight='bold')
-    ax4b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
-    ax4b.set_title('Gimbal Elevation Velocity', fontsize=12, fontweight='bold')
-    ax4b.legend(loc='best', fontsize=9)
+    ax4b.set_ylabel('Elevation Rate [deg/s]', fontsize=14, fontweight='bold')
+    ax4b.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
+    ax4b.set_title('Gimbal Elevation Velocity', fontsize=14, fontweight='bold')
+    ax4b.legend(loc='best', fontsize=14)
     ax4b.grid(True, alpha=0.3, linestyle=':')
     
     fig4.suptitle('Gimbal Angular Velocities', fontsize=14, fontweight='bold')
@@ -427,10 +452,10 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax5a.plot(np.rad2deg(results_ndob['log_arrays']['q_az']), 
               np.rad2deg(results_ndob['log_arrays']['qd_az']), 
               color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.7)
-    ax5a.set_xlabel('Az Angle [deg]', fontsize=11, fontweight='bold')
-    ax5a.set_ylabel('Az Rate [deg/s]', fontsize=11, fontweight='bold')
-    ax5a.set_title('Az Phase Plane', fontsize=12, fontweight='bold')
-    ax5a.legend(loc='best', fontsize=9)
+    ax5a.set_xlabel('Az Angle [deg]', fontsize=14, fontweight='bold')
+    ax5a.set_ylabel('Az Rate [deg/s]', fontsize=14, fontweight='bold')
+    ax5a.set_title('Az Phase Plane', fontsize=14, fontweight='bold')
+    ax5a.legend(loc='best', fontsize=14)
     ax5a.grid(True, alpha=0.3, linestyle=':')
     
     # Elevation Phase Plane
@@ -443,10 +468,10 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax5b.plot(np.rad2deg(results_ndob['log_arrays']['q_el']), 
               np.rad2deg(results_ndob['log_arrays']['qd_el']), 
               color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.7)
-    ax5b.set_xlabel('El Angle [deg]', fontsize=11, fontweight='bold')
-    ax5b.set_ylabel('El Rate [deg/s]', fontsize=11, fontweight='bold')
-    ax5b.set_title('El Phase Plane', fontsize=12, fontweight='bold')
-    ax5b.legend(loc='best', fontsize=9)
+    ax5b.set_xlabel('El Angle [deg]', fontsize=14, fontweight='bold')
+    ax5b.set_ylabel('El Rate [deg/s]', fontsize=14, fontweight='bold')
+    ax5b.set_title('El Phase Plane', fontsize=14, fontweight='bold')
+    ax5b.legend(loc='best', fontsize=14)
     ax5b.grid(True, alpha=0.3, linestyle=':')
     
     fig5.suptitle('Gimbal Phase Plane', fontsize=14, fontweight='bold')
@@ -462,9 +487,9 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax6a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['los_error_x']), color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
     ax6a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['los_error_x']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
     ax6a.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
-    ax6a.set_ylabel('LOS Error X [deg]', fontsize=11, fontweight='bold')
-    ax6a.set_title('Line-of-Sight Error X-Axis', fontsize=12, fontweight='bold')
-    ax6a.legend(loc='best', fontsize=9)
+    ax6a.set_ylabel('LOS Error X [deg]', fontsize=14, fontweight='bold')
+    ax6a.set_title('Line-of-Sight Error X-Axis', fontsize=14, fontweight='bold')
+    ax6a.legend(loc='best', fontsize=14)
     ax6a.grid(True, alpha=0.3, linestyle=':')
     
     # LOS Error Y (Tilt)
@@ -472,9 +497,9 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax6b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['los_error_y']), color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
     ax6b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['los_error_y']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
     ax6b.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
-    ax6b.set_ylabel('LOS Error Y [deg]', fontsize=11, fontweight='bold')
-    ax6b.set_title('Line-of-Sight Error Y-Axis', fontsize=12, fontweight='bold')
-    ax6b.legend(loc='best', fontsize=9)
+    ax6b.set_ylabel('LOS Error Y [deg]', fontsize=14, fontweight='bold')
+    ax6b.set_title('Line-of-Sight Error Y-Axis', fontsize=14, fontweight='bold')
+    ax6b.legend(loc='best', fontsize=14)
     ax6b.grid(True, alpha=0.3, linestyle=':')
     
     # Total LOS Error
@@ -486,10 +511,10 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax6c.plot(t_fbl, los_total_fbl, color=COLOR_FBL, linewidth=2, label='FBL', alpha=0.9)
     ax6c.plot(t_ndob, los_total_ndob, color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
     ax6c.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
-    ax6c.set_ylabel('Total LOS Error [deg]', fontsize=11, fontweight='bold')
-    ax6c.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
-    ax6c.set_title('Total Line-of-Sight Error Magnitude', fontsize=12, fontweight='bold')
-    ax6c.legend(loc='best', fontsize=9)
+    ax6c.set_ylabel('Total LOS Error [deg]', fontsize=14, fontweight='bold')
+    ax6c.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
+    ax6c.set_title('Total Line-of-Sight Error Magnitude', fontsize=14, fontweight='bold')
+    ax6c.legend(loc='best', fontsize=14)
     ax6c.grid(True, alpha=0.3, linestyle=':')
     
     # Add RMS metric to title (matching simulation_runner.py)
@@ -517,34 +542,34 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     # Settling Time
     bars1 = ax7a.bar(x - width/2, settling_az, width, label='Azimuth', color=color_az, alpha=0.7)
     bars2 = ax7a.bar(x + width/2, settling_el, width, label='Elevation', color=color_el, alpha=0.7)
-    ax7a.set_ylabel('Settling Time [s]', fontsize=11, fontweight='bold')
-    ax7a.set_title('Settling Time (2% Criterion)', fontsize=12, fontweight='bold')
+    ax7a.set_ylabel('Settling Time [s]', fontsize=14, fontweight='bold')
+    ax7a.set_title('Settling Time (2% Criterion)', fontsize=14, fontweight='bold')
     ax7a.set_xticks(x)
-    ax7a.set_xticklabels(controllers, fontsize=10)
-    ax7a.legend(loc='best', fontsize=9)
+    ax7a.set_xticklabels(controllers, fontsize=14)
+    ax7a.legend(loc='best', fontsize=14)
     ax7a.grid(True, alpha=0.3, axis='y', linestyle=':')
     
     # Steady-State Error
-    sse_az = [abs(metrics_pid['ss_error_az'])*1e6, abs(metrics_fbl['ss_error_az'])*1e6, abs(metrics_ndob['ss_error_az'])*1e6]
-    sse_el = [abs(metrics_pid['ss_error_el'])*1e6, abs(metrics_fbl['ss_error_el'])*1e6, abs(metrics_ndob['ss_error_el'])*1e6]
+    sse_az = [np.rad2deg(abs(metrics_pid['ss_error_az'])), np.rad2deg(abs(metrics_fbl['ss_error_az'])), np.rad2deg(abs(metrics_ndob['ss_error_az']))]
+    sse_el = [np.rad2deg(abs(metrics_pid['ss_error_el'])), np.rad2deg(abs(metrics_fbl['ss_error_el'])), np.rad2deg(abs(metrics_ndob['ss_error_el']))]
     
     bars3 = ax7b.bar(x - width/2, sse_az, width, label='Azimuth', color=color_az, alpha=0.7)
     bars4 = ax7b.bar(x + width/2, sse_el, width, label='Elevation', color=color_el, alpha=0.7)
-    ax7b.set_ylabel('Steady-State Error [µrad]', fontsize=11, fontweight='bold')
-    ax7b.set_title('Steady-State Error', fontsize=12, fontweight='bold')
+    ax7b.set_ylabel('Steady-State Error [deg]', fontsize=14, fontweight='bold')
+    ax7b.set_title('Steady-State Error', fontsize=14, fontweight='bold')
     ax7b.set_xticks(x)
-    ax7b.set_xticklabels(controllers, fontsize=10)
-    ax7b.legend(loc='best', fontsize=9)
+    ax7b.set_xticklabels(controllers, fontsize=14)
+    ax7b.legend(loc='best', fontsize=14)
     ax7b.grid(True, alpha=0.3, axis='y', linestyle=':')
     ax7b.set_yscale('log')
     
     # RMS LOS Error
-    los_rms = [results_pid['los_error_rms']*1e6, results_fbl['los_error_rms']*1e6, results_ndob['los_error_rms']*1e6]
+    los_rms = [np.rad2deg(results_pid['los_error_rms']), np.rad2deg(results_fbl['los_error_rms']), np.rad2deg(results_ndob['los_error_rms'])]
     bars5 = ax7c.bar(x, los_rms, color=[COLOR_PID, COLOR_FBL, COLOR_NDOB], alpha=0.7)
-    ax7c.set_ylabel('LOS RMS Error [µrad]', fontsize=11, fontweight='bold')
-    ax7c.set_title('RMS Line-of-Sight Error', fontsize=12, fontweight='bold')
+    ax7c.set_ylabel('LOS RMS Error [deg]', fontsize=14, fontweight='bold')
+    ax7c.set_title('RMS Line-of-Sight Error', fontsize=14, fontweight='bold')
     ax7c.set_xticks(x)
-    ax7c.set_xticklabels(controllers, fontsize=10)
+    ax7c.set_xticklabels(controllers, fontsize=14)
     ax7c.grid(True, alpha=0.3, axis='y', linestyle=':')
     
     # Control Effort
@@ -553,11 +578,11 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
         np.sqrt(results_fbl['torque_rms_az']**2 + results_fbl['torque_rms_el']**2),
         np.sqrt(results_ndob['torque_rms_az']**2 + results_ndob['torque_rms_el']**2)
     ]
-    bars6 = ax7d.bar(x, torque_rms, color=[COLOR_PID, COLOR_FBL, COLOR_NDOB], alpha=0.7)
-    ax7d.set_ylabel('Total Torque RMS [N·m]', fontsize=11, fontweight='bold')
-    ax7d.set_title('Control Effort', fontsize=12, fontweight='bold')
+    bars6 = ax7d.bar(x, np.array(torque_rms)*1e3, color=[COLOR_PID, COLOR_FBL, COLOR_NDOB], alpha=0.7)
+    ax7d.set_ylabel('Total Torque RMS [mN·m]', fontsize=14, fontweight='bold')
+    ax7d.set_title('Control Effort', fontsize=14, fontweight='bold')
     ax7d.set_xticks(x)
-    ax7d.set_xticklabels(controllers, fontsize=10)
+    ax7d.set_xticklabels(controllers, fontsize=14)
     ax7d.grid(True, alpha=0.3, axis='y', linestyle=':')
     
     fig7.suptitle('Performance Metrics Summary', fontsize=14, fontweight='bold')
@@ -570,61 +595,61 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     fig8, ((ax8a, ax8b), (ax8c, ax8d)) = plt.subplots(2, 2, figsize=(10, 7), constrained_layout=True)
     
     # Estimated vs Actual Azimuth
-    ax8a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_az']), color=COLOR_PID, linewidth=1, label='PID Est', alpha=0.9)
-    ax8a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_az']), color=COLOR_FBL, linewidth=1, label='FBL Est', alpha=0.9)
-    ax8a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_az']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB Est', alpha=0.9)
+    ax8a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_az']), color=COLOR_PID, linewidth=2, label='PID Est', alpha=0.9)
+    ax8a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_az']), color=COLOR_FBL, linewidth=2, label='FBL Est', alpha=0.9)
+    ax8a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_az']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB Est', alpha=0.9)
     # Ground Truth signals
-    ax8a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['q_az']), color=COLOR_PID, linewidth=1, linestyle='--', alpha=0.4, label='PID Truth')
-    ax8a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['q_az']), color=COLOR_FBL, linewidth=1, linestyle='--', alpha=0.4, label='FBL Truth')
-    ax8a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['q_az']), color=COLOR_NDOB, linewidth=1, linestyle='--', alpha=0.4, label='NDOB Truth')
+    ax8a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['q_az']), color=COLOR_PID, linewidth=2, linestyle='--', alpha=0.4, label='PID Truth')
+    ax8a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['q_az']), color=COLOR_FBL, linewidth=2, linestyle='--', alpha=0.4, label='FBL Truth')
+    ax8a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['q_az']), color=COLOR_NDOB, linewidth=2, linestyle='--', alpha=0.4, label='NDOB Truth')
     
-    ax8a.set_ylabel('Azimuth [deg]', fontsize=11, fontweight='bold')
-    ax8a.set_title('Azimuth Position Estimate vs Truth', fontsize=12, fontweight='bold')
-    ax8a.legend(loc='best', fontsize=8, ncol=2)
+    ax8a.set_ylabel('Azimuth [deg]', fontsize=14, fontweight='bold')
+    ax8a.set_title('Azimuth Position Estimate vs Truth', fontsize=14, fontweight='bold')
+    ax8a.legend(loc='best', fontsize=14, ncol=2)
     ax8a.grid(True, alpha=0.3, linestyle=':')
     
     # Estimated vs Actual Elevation
-    ax8b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_el']), color=COLOR_PID, linewidth=1, label='PID Est', alpha=0.9)
-    ax8b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_el']), color=COLOR_FBL, linewidth=1, label='FBL Est', alpha=0.9)
-    ax8b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_el']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB Est', alpha=0.9)
+    ax8b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_el']), color=COLOR_PID, linewidth=2, label='PID Est', alpha=0.9)
+    ax8b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_el']), color=COLOR_FBL, linewidth=2, label='FBL Est', alpha=0.9)
+    ax8b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_el']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB Est', alpha=0.9)
     # Ground Truth signals
-    ax8b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['q_el']), color=COLOR_PID, linewidth=1, linestyle='--', alpha=0.4)
-    ax8b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['q_el']), color=COLOR_FBL, linewidth=1, linestyle='--', alpha=0.4)
-    ax8b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['q_el']), color=COLOR_NDOB, linewidth=1, linestyle='--', alpha=0.4)
+    ax8b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['q_el']), color=COLOR_PID, linewidth=2, linestyle='--', alpha=0.4)
+    ax8b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['q_el']), color=COLOR_FBL, linewidth=2, linestyle='--', alpha=0.4)
+    ax8b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['q_el']), color=COLOR_NDOB, linewidth=2, linestyle='--', alpha=0.4)
     
-    ax8b.set_ylabel('Elevation [deg]', fontsize=11, fontweight='bold')
-    ax8b.set_title('Elevation Position Estimate vs Truth', fontsize=12, fontweight='bold')
-    ax8b.legend(loc='best', fontsize=8)
+    ax8b.set_ylabel('Elevation [deg]', fontsize=14, fontweight='bold')
+    ax8b.set_title('Elevation Position Estimate vs Truth', fontsize=14, fontweight='bold')
+    ax8b.legend(loc='best', fontsize=14)
     ax8b.grid(True, alpha=0.3, linestyle=':')
     
     # Estimated vs Actual Azimuth Rate
-    ax8c.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_az_dot']), color=COLOR_PID, linewidth=1, label='PID Est', alpha=0.9)
-    ax8c.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_az_dot']), color=COLOR_FBL, linewidth=1, label='FBL Est', alpha=0.9)
-    ax8c.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_az_dot']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB Est', alpha=0.9)
+    ax8c.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_az_dot']), color=COLOR_PID, linewidth=2, label='PID Est', alpha=0.9)
+    ax8c.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_az_dot']), color=COLOR_FBL, linewidth=2, label='FBL Est', alpha=0.9)
+    ax8c.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_az_dot']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB Est', alpha=0.9)
     # Ground Truth signals
-    ax8c.plot(t_pid, np.rad2deg(results_pid['log_arrays']['qd_az']), color=COLOR_PID, linewidth=1, linestyle='--', alpha=0.4)
-    ax8c.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['qd_az']), color=COLOR_FBL, linewidth=1, linestyle='--', alpha=0.4)
-    ax8c.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['qd_az']), color=COLOR_NDOB, linewidth=1, linestyle='--', alpha=0.4)
+    ax8c.plot(t_pid, np.rad2deg(results_pid['log_arrays']['qd_az']), color=COLOR_PID, linewidth=2, linestyle='--', alpha=0.4)
+    ax8c.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['qd_az']), color=COLOR_FBL, linewidth=2, linestyle='--', alpha=0.4)
+    ax8c.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['qd_az']), color=COLOR_NDOB, linewidth=2, linestyle='--', alpha=0.4)
     
-    ax8c.set_ylabel('Az Rate [deg/s]', fontsize=11, fontweight='bold')
-    ax8c.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
-    ax8c.set_title('Azimuth Rate Estimate vs Truth', fontsize=12, fontweight='bold')
-    ax8c.legend(loc='best', fontsize=8)
+    ax8c.set_ylabel('Az Rate [deg/s]', fontsize=14, fontweight='bold')
+    ax8c.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
+    ax8c.set_title('Azimuth Rate Estimate vs Truth', fontsize=14, fontweight='bold')
+    ax8c.legend(loc='best', fontsize=14)
     ax8c.grid(True, alpha=0.3, linestyle=':')
     
     # Estimated vs Actual Elevation Rate
-    ax8d.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_el_dot']), color=COLOR_PID, linewidth=1, label='PID Est', alpha=0.9)
-    ax8d.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_el_dot']), color=COLOR_FBL, linewidth=1, label='FBL Est', alpha=0.9)
-    ax8d.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_el_dot']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB Est', alpha=0.9)
+    ax8d.plot(t_pid, np.rad2deg(results_pid['log_arrays']['est_el_dot']), color=COLOR_PID, linewidth=2, label='PID Est', alpha=0.9)
+    ax8d.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['est_el_dot']), color=COLOR_FBL, linewidth=2, label='FBL Est', alpha=0.9)
+    ax8d.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['est_el_dot']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB Est', alpha=0.9)
     # Ground Truth signals
-    ax8d.plot(t_pid, np.rad2deg(results_pid['log_arrays']['qd_el']), color=COLOR_PID, linewidth=1, linestyle='--', alpha=0.4)
-    ax8d.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['qd_el']), color=COLOR_FBL, linewidth=1, linestyle='--', alpha=0.4)
-    ax8d.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['qd_el']), color=COLOR_NDOB, linewidth=1, linestyle='--', alpha=0.4)
+    ax8d.plot(t_pid, np.rad2deg(results_pid['log_arrays']['qd_el']), color=COLOR_PID, linewidth=2, linestyle='--', alpha=0.4)
+    ax8d.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['qd_el']), color=COLOR_FBL, linewidth=2, linestyle='--', alpha=0.4)
+    ax8d.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['qd_el']), color=COLOR_NDOB, linewidth=2, linestyle='--', alpha=0.4)
     
-    ax8d.set_ylabel('El Rate [deg/s]', fontsize=11, fontweight='bold')
-    ax8d.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
-    ax8d.set_title('Elevation Rate Estimate vs Truth', fontsize=12, fontweight='bold')
-    ax8d.legend(loc='best', fontsize=8)
+    ax8d.set_ylabel('El Rate [deg/s]', fontsize=14, fontweight='bold')
+    ax8d.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
+    ax8d.set_title('Elevation Rate Estimate vs Truth', fontsize=14, fontweight='bold')
+    ax8d.legend(loc='best', fontsize=14)
     ax8d.grid(True, alpha=0.3, linestyle=':')
     
     fig8.suptitle('EKF Performance (Estimate vs Ground Truth)', fontsize=14, fontweight='bold')
@@ -636,34 +661,34 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     fig9, (ax9a, ax9b) = plt.subplots(2, 1, figsize=(10, 7), sharex=True, constrained_layout=True)
     
     # FSM Tip Performance
-    ax9a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['fsm_tip']), color=COLOR_PID, linewidth=1, label='PID Tip', alpha=0.9)
-    ax9a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['fsm_tip']), color=COLOR_FBL, linewidth=1, label='FBL Tip', alpha=0.9)
-    ax9a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['fsm_tip']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB Tip', alpha=0.9)
+    ax9a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['fsm_tip']), color=COLOR_PID, linewidth=2, label='PID Tip', alpha=0.9)
+    ax9a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['fsm_tip']), color=COLOR_FBL, linewidth=2, label='FBL Tip', alpha=0.9)
+    ax9a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['fsm_tip']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB Tip', alpha=0.9)
     
     # FSM Tip Commands (Reference)
-    ax9a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['fsm_cmd_tip']), color=COLOR_PID, linewidth=1, linestyle='--', alpha=0.5, label='PID Cmd')
-    ax9a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['fsm_cmd_tip']), color=COLOR_FBL, linewidth=1, linestyle='--', alpha=0.5, label='FBL Cmd')
-    ax9a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['fsm_cmd_tip']), color=COLOR_NDOB, linewidth=1, linestyle='--', alpha=0.5, label='NDOB Cmd')
+    ax9a.plot(t_pid, np.rad2deg(results_pid['log_arrays']['fsm_cmd_tip']), color=COLOR_PID, linewidth=2, linestyle='--', alpha=0.5, label='PID Cmd')
+    ax9a.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['fsm_cmd_tip']), color=COLOR_FBL, linewidth=2, linestyle='--', alpha=0.5, label='FBL Cmd')
+    ax9a.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['fsm_cmd_tip']), color=COLOR_NDOB, linewidth=2, linestyle='--', alpha=0.5, label='NDOB Cmd')
     
-    ax9a.set_ylabel('Tip [deg]', fontsize=11, fontweight='bold')
-    ax9a.set_title('FSM Tip Axis Performance', fontsize=12, fontweight='bold')
-    ax9a.legend(loc='best', fontsize=8, ncol=2)
+    ax9a.set_ylabel('Tip [deg]', fontsize=14, fontweight='bold')
+    ax9a.set_title('FSM Tip Axis Performance', fontsize=14, fontweight='bold')
+    ax9a.legend(loc='best', fontsize=14, ncol=2)
     ax9a.grid(True, alpha=0.3, linestyle=':')
     
     # FSM Tilt Performance
-    ax9b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['fsm_tilt']), color=COLOR_PID, linewidth=1, label='PID Tilt', alpha=0.9)
-    ax9b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['fsm_tilt']), color=COLOR_FBL, linewidth=1, label='FBL Tilt', alpha=0.9)
-    ax9b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['fsm_tilt']), color=COLOR_NDOB, linewidth=1, label='FBL+NDOB Tilt', alpha=0.9)
+    ax9b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['fsm_tilt']), color=COLOR_PID, linewidth=2, label='PID Tilt', alpha=0.9)
+    ax9b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['fsm_tilt']), color=COLOR_FBL, linewidth=2, label='FBL Tilt', alpha=0.9)
+    ax9b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['fsm_tilt']), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB Tilt', alpha=0.9)
     
     # FSM Tilt Commands (Reference)
-    ax9b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['fsm_cmd_tilt']), color=COLOR_PID, linewidth=1, linestyle='--', alpha=0.5)
-    ax9b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['fsm_cmd_tilt']), color=COLOR_FBL, linewidth=1, linestyle='--', alpha=0.5)
-    ax9b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['fsm_cmd_tilt']), color=COLOR_NDOB, linewidth=1, linestyle='--', alpha=0.5)
+    ax9b.plot(t_pid, np.rad2deg(results_pid['log_arrays']['fsm_cmd_tilt']), color=COLOR_PID, linewidth=2, linestyle='--', alpha=0.5)
+    ax9b.plot(t_fbl, np.rad2deg(results_fbl['log_arrays']['fsm_cmd_tilt']), color=COLOR_FBL, linewidth=2, linestyle='--', alpha=0.5)
+    ax9b.plot(t_ndob, np.rad2deg(results_ndob['log_arrays']['fsm_cmd_tilt']), color=COLOR_NDOB, linewidth=2, linestyle='--', alpha=0.5)
     
-    ax9b.set_ylabel('Tilt [deg]', fontsize=11, fontweight='bold')
-    ax9b.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
-    ax9b.set_title('FSM Tilt Axis Performance', fontsize=12, fontweight='bold')
-    ax9b.legend(loc='best', fontsize=8)
+    ax9b.set_ylabel('Tilt [deg]', fontsize=14, fontweight='bold')
+    ax9b.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
+    ax9b.set_title('FSM Tilt Axis Performance', fontsize=14, fontweight='bold')
+    ax9b.legend(loc='best', fontsize=14)
     ax9b.grid(True, alpha=0.3, linestyle=':')
     
     fig9.suptitle('FSM Tip/Tilt Response vs Commands', fontsize=14, fontweight='bold')
@@ -700,44 +725,44 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     d_true_el_ndob = friction_coef * results_ndob['log_arrays']['qd_el']
     
     # Subplot 1: Virtual Control Input (v) - Acceleration Demand from Outer Loop
-    ax10a.plot(t_fbl, v_az_fbl, color=COLOR_FBL, linewidth=1.5, label='FBL Az', alpha=0.9)
-    ax10a.plot(t_ndob, v_az_ndob, color=COLOR_NDOB, linewidth=1.5, label='FBL+NDOB Az', alpha=0.9, linestyle='--')
-    ax10a.plot(t_fbl, v_el_fbl, color=COLOR_FBL, linewidth=1.5, label='FBL El', alpha=0.7, linestyle=':')
-    ax10a.plot(t_ndob, v_el_ndob, color=COLOR_NDOB, linewidth=1.5, label='FBL+NDOB El', alpha=0.7, linestyle='-.')
-    ax10a.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
-    ax10a.set_ylabel(r'Virtual Control $v$ [rad/s$^2$]', fontsize=11, fontweight='bold')
+    ax10a.plot(t_fbl, v_az_fbl, color=COLOR_FBL, linewidth=2, label='FBL Az', alpha=0.9)
+    ax10a.plot(t_ndob, v_az_ndob, color=COLOR_NDOB, linewidth=2, label='FBL+NDOB Az', alpha=0.9, linestyle='--')
+    ax10a.plot(t_fbl, v_el_fbl, color=COLOR_FBL, linewidth=2, label='FBL El', alpha=0.7, linestyle=':')
+    ax10a.plot(t_ndob, v_el_ndob, color=COLOR_NDOB, linewidth=2, label='FBL+NDOB El', alpha=0.7, linestyle='-.')
+    ax10a.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
+    ax10a.set_ylabel(r'Virtual Control $v$ [rad/s$^2$]', fontsize=14, fontweight='bold')
     ax10a.set_title(r'Virtual Control Input (Outer Loop $v = \ddot{q}_{ref} + K_p e + K_d \dot{e}$)', 
-                    fontsize=12, fontweight='bold')
-    ax10a.legend(loc='best', fontsize=9, ncol=2)
+                    fontsize=14, fontweight='bold')
+    ax10a.legend(loc='best', fontsize=14, ncol=2)
     ax10a.grid(True, alpha=0.3, linestyle=':')
     
     # Subplot 2: Commanded Torques (τ) - Total Control Effort
-    ax10b.plot(t_fbl, tau_az_fbl, color=COLOR_FBL, linewidth=1.5, label='FBL Az', alpha=0.9)
-    ax10b.plot(t_ndob, tau_az_ndob, color=COLOR_NDOB, linewidth=1.5, label='FBL+NDOB Az', alpha=0.9, linestyle='--')
-    ax10b.plot(t_fbl, tau_el_fbl, color=COLOR_FBL, linewidth=1.5, label='FBL El', alpha=0.7, linestyle=':')
-    ax10b.plot(t_ndob, tau_el_ndob, color=COLOR_NDOB, linewidth=1.5, label='FBL+NDOB El', alpha=0.7, linestyle='-.')
-    ax10b.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
-    ax10b.axhline(1.0, color='red', linewidth=1.0, linestyle=':', alpha=0.6, label='Saturation')
-    ax10b.axhline(-1.0, color='red', linewidth=1.0, linestyle=':', alpha=0.6)
-    ax10b.set_ylabel(r'Torque $\tau$ [N·m]', fontsize=11, fontweight='bold')
+    ax10b.plot(t_fbl, tau_az_fbl, color=COLOR_FBL, linewidth=2, label='FBL Az', alpha=0.9)
+    ax10b.plot(t_ndob, tau_az_ndob, color=COLOR_NDOB, linewidth=2, label='FBL+NDOB Az', alpha=0.9, linestyle='--')
+    ax10b.plot(t_fbl, tau_el_fbl, color=COLOR_FBL, linewidth=2, label='FBL El', alpha=0.7, linestyle=':')
+    ax10b.plot(t_ndob, tau_el_ndob, color=COLOR_NDOB, linewidth=2, label='FBL+NDOB El', alpha=0.7, linestyle='-.')
+    ax10b.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
+    ax10b.axhline(1.0, color='red', linewidth=2, linestyle=':', alpha=0.6, label='Saturation')
+    ax10b.axhline(-1.0, color='red', linewidth=2, linestyle=':', alpha=0.6)
+    ax10b.set_ylabel(r'Torque $\tau$ [N·m]', fontsize=14, fontweight='bold')
     ax10b.set_title(r'Commanded Motor Torque ($\tau = Mv + C\dot{q} + G - \hat{d}$)', 
-                    fontsize=12, fontweight='bold')
-    ax10b.legend(loc='best', fontsize=9, ncol=2)
+                    fontsize=14, fontweight='bold')
+    ax10b.legend(loc='best', fontsize=14, ncol=2)
     ax10b.grid(True, alpha=0.3, linestyle=':')
     
     # Subplot 3: Disturbance Estimate (d_hat) vs Ground Truth
-    ax10c.plot(t_ndob, d_hat_az_ndob, color=COLOR_NDOB, linewidth=1.5, label='NDOB Est Az', alpha=0.9)
-    ax10c.plot(t_ndob, d_hat_el_ndob, color='purple', linewidth=1.5, label='NDOB Est El', alpha=0.9, linestyle='--')
-    ax10c.plot(t_ndob, d_true_az_ndob, color='gray', linewidth=1.0, linestyle=':', 
+    ax10c.plot(t_ndob, d_hat_az_ndob, color=COLOR_NDOB, linewidth=2, label='NDOB Est Az', alpha=0.9)
+    ax10c.plot(t_ndob, d_hat_el_ndob, color='purple', linewidth=2, label='NDOB Est El', alpha=0.9, linestyle='--')
+    ax10c.plot(t_ndob, d_true_az_ndob, color='gray', linewidth=2, linestyle=':', 
                label='Ground Truth Az', alpha=0.7)
-    ax10c.plot(t_ndob, d_true_el_ndob, color='gray', linewidth=1.0, linestyle='-.', 
+    ax10c.plot(t_ndob, d_true_el_ndob, color='gray', linewidth=2, linestyle='-.', 
                label='Ground Truth El', alpha=0.7)
-    ax10c.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5, label='Zero Disturbance')
-    ax10c.set_ylabel(r'Disturbance $\hat{d}$ [N·m]', fontsize=11, fontweight='bold')
-    ax10c.set_xlabel('Time [s]', fontsize=11, fontweight='bold')
+    ax10c.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5, label='Zero Disturbance')
+    ax10c.set_ylabel(r'Disturbance $\hat{d}$ [N·m]', fontsize=14, fontweight='bold')
+    ax10c.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
     ax10c.set_title(r'NDOB Disturbance Estimate ($\hat{d} = z + L M(q) \dot{q}$)', 
-                    fontsize=12, fontweight='bold')
-    ax10c.legend(loc='best', fontsize=9, ncol=2)
+                    fontsize=14, fontweight='bold')
+    ax10c.legend(loc='best', fontsize=14, ncol=2)
     ax10c.grid(True, alpha=0.3, linestyle=':')
     
     fig10.suptitle('Figure 10: Internal Control Signal & Disturbance Observer Analysis', 
@@ -754,36 +779,36 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     
     # Subplot 11a: State Covariance (Position, Velocity, Bias for Az/El)
     if 'ekf_cov_theta_az' in log_arrays_fbl:
-        ax11a.semilogy(t_fbl_ekf, log_arrays_fbl['ekf_cov_theta_az'], 'b-', linewidth=1.5, label=r'$P_{\theta_{Az}}$')
-        ax11a.semilogy(t_fbl_ekf, log_arrays_fbl['ekf_cov_theta_dot_az'], 'r-', linewidth=1.5, label=r'$P_{\dot{\theta}_{Az}}$')
-        ax11a.semilogy(t_fbl_ekf, log_arrays_fbl['ekf_cov_bias_az'], 'g-', linewidth=1.5, label=r'$P_{b_{Az}}$')
-        ax11a.set_ylabel('Covariance Diagonal', fontsize=12, fontweight='bold')
-        ax11a.set_title('(a) EKF State Covariance Evolution (Log Scale)', fontsize=12, fontweight='bold')
-        ax11a.legend(loc='best', fontsize=9, ncol=3)
+        ax11a.semilogy(t_fbl_ekf, log_arrays_fbl['ekf_cov_theta_az'], 'b-', linewidth=2, label=r'$P_{\theta_{Az}}$')
+        ax11a.semilogy(t_fbl_ekf, log_arrays_fbl['ekf_cov_theta_dot_az'], 'r-', linewidth=2, label=r'$P_{\dot{\theta}_{Az}}$')
+        ax11a.semilogy(t_fbl_ekf, log_arrays_fbl['ekf_cov_bias_az'], 'g-', linewidth=2, label=r'$P_{b_{Az}}$')
+        ax11a.set_ylabel('Covariance Diagonal', fontsize=14, fontweight='bold')
+        ax11a.set_title('(a) EKF State Covariance Evolution (Log Scale)', fontsize=14, fontweight='bold')
+        ax11a.legend(loc='best', fontsize=14, ncol=3)
         ax11a.grid(True, alpha=0.3, linestyle=':')
     else:
         # Placeholder when diagnostics not yet logged
         ax11a.text(0.5, 0.5, 'EKF Covariance Logging Not Yet Implemented\n(Requires simulation_runner enhancement)',
-                   ha='center', va='center', transform=ax11a.transAxes, fontsize=10)
-        ax11a.set_ylabel('Covariance', fontsize=12)
-        ax11a.set_title('(a) EKF State Covariance Evolution', fontsize=12, fontweight='bold')
+                   ha='center', va='center', transform=ax11a.transAxes, fontsize=14)
+        ax11a.set_ylabel('Covariance', fontsize=14)
+        ax11a.set_title('(a) EKF State Covariance Evolution', fontsize=14, fontweight='bold')
     
     # Subplot 11b: Innovation Residuals (Encoder Az/El)
     if 'ekf_innovation_enc_az' in log_arrays_fbl:
         ax11b.plot(t_fbl_ekf, np.rad2deg(log_arrays_fbl['ekf_innovation_enc_az']), 'b-', 
-                   linewidth=1.2, label='Encoder Az Innovation')
+                   linewidth=2, label='Encoder Az Innovation')
         ax11b.plot(t_fbl_ekf, np.rad2deg(log_arrays_fbl['ekf_innovation_enc_el']), 'r-', 
-                   linewidth=1.2, label='Encoder El Innovation')
-        ax11b.axhline(0, color='k', linestyle='--', linewidth=1, alpha=0.5)
-        ax11b.set_ylabel('Innovation [deg]', fontsize=12, fontweight='bold')
-        ax11b.set_title('(b) Measurement Innovation (Encoder Residuals)', fontsize=12, fontweight='bold')
-        ax11b.legend(loc='best', fontsize=9)
+                   linewidth=2, label='Encoder El Innovation')
+        ax11b.axhline(0, color='k', linestyle='--', linewidth=2, alpha=0.5)
+        ax11b.set_ylabel('Innovation [deg]', fontsize=14, fontweight='bold')
+        ax11b.set_title('(b) Measurement Innovation (Encoder Residuals)', fontsize=14, fontweight='bold')
+        ax11b.legend(loc='best', fontsize=14)
         ax11b.grid(True, alpha=0.3, linestyle=':')
     else:
         ax11b.text(0.5, 0.5, 'Innovation Logging Not Yet Implemented',
-                   ha='center', va='center', transform=ax11b.transAxes, fontsize=10)
-        ax11b.set_ylabel('Innovation [deg]', fontsize=12)
-        ax11b.set_title('(b) Measurement Innovation', fontsize=12, fontweight='bold')
+                   ha='center', va='center', transform=ax11b.transAxes, fontsize=14)
+        ax11b.set_ylabel('Innovation [deg]', fontsize=14)
+        ax11b.set_title('(b) Measurement Innovation', fontsize=14, fontweight='bold')
     
     # Subplot 11c: 3-Sigma Bounds & Violations
     if 'ekf_innovation_3sigma_az' in log_arrays_fbl:
@@ -801,25 +826,230 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
             ax11c.scatter(t_fbl_ekf[violations], np.rad2deg(log_arrays_fbl['ekf_innovation_enc_az'][violations]),
                          color='red', marker='x', s=100, linewidths=2, label='3σ Violation', zorder=10)
         
-        ax11c.set_xlabel('Time [s]', fontsize=12, fontweight='bold')
-        ax11c.set_ylabel('Innovation [deg]', fontsize=12, fontweight='bold')
-        ax11c.set_title('(c) Innovation Bounds & Consistency Check', fontsize=12, fontweight='bold')
-        ax11c.legend(loc='best', fontsize=9)
+        ax11c.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
+        ax11c.set_ylabel('Innovation [deg]', fontsize=14, fontweight='bold')
+        ax11c.set_title('(c) Innovation Bounds & Consistency Check', fontsize=14, fontweight='bold')
+        ax11c.legend(loc='best', fontsize=14)
         ax11c.grid(True, alpha=0.3, linestyle=':')
     else:
         ax11c.text(0.5, 0.5, '3-Sigma Bounds Logging Not Yet Implemented',
-                   ha='center', va='center', transform=ax11c.transAxes, fontsize=10)
-        ax11c.set_xlabel('Time [s]', fontsize=12)
-        ax11c.set_ylabel('Innovation [deg]', fontsize=12)
-        ax11c.set_title('(c) Innovation Consistency Check', fontsize=12, fontweight='bold')
+                   ha='center', va='center', transform=ax11c.transAxes, fontsize=14)
+        ax11c.set_xlabel('Time [s]', fontsize=14)
+        ax11c.set_ylabel('Innovation [deg]', fontsize=14)
+        ax11c.set_title('(c) Innovation Consistency Check', fontsize=14, fontweight='bold')
     
     fig11.suptitle('Figure 11: Extended Kalman Filter Diagnostics & Adaptive Tuning', 
                    fontsize=14, fontweight='bold')
 
     # =============================================================================
+    # FIGURE 12: Environmental Disturbance Torques (Wind & Structural Vibration)
+    # Publication-quality visualization of stochastic disturbance injection
+    # =============================================================================
+    fig12, axes12 = plt.subplots(2, 2, figsize=(14, 10), constrained_layout=True)
+    ax12a, ax12b = axes12[0]  # Row 1: Total disturbance torques
+    ax12c, ax12d = axes12[1]  # Row 2: Wind vs Vibration breakdown
+    
+    # Check if disturbance signals are available (from NDOB simulation with disturbances)
+    log_ndob = results_ndob['log_arrays']
+    has_disturbance = 'tau_disturbance_az' in log_ndob and np.std(log_ndob['tau_disturbance_az']) > 1e-10
+    
+    if has_disturbance:
+        t_dist = log_ndob['time']
+        tau_d_az = np.array(log_ndob['tau_disturbance_az']) * 1000  # Convert to mN·m
+        tau_d_el = np.array(log_ndob['tau_disturbance_el']) * 1000
+        wind_az = np.array(log_ndob['wind_torque_az']) * 1000
+        wind_el = np.array(log_ndob['wind_torque_el']) * 1000
+        vib_az = np.array(log_ndob['vibration_torque_az']) * 1000
+        vib_el = np.array(log_ndob['vibration_torque_el']) * 1000
+        
+        # Color palette for professional appearance
+        COLOR_TOTAL = '#2c3e50'      # Dark blue-gray (total disturbance)
+        COLOR_WIND = '#e74c3c'       # Red (wind/gust)
+        COLOR_VIB = '#3498db'        # Blue (vibration)
+        COLOR_STRUCT = '#9b59b6'     # Purple (structural)
+        COLOR_AZ = '#1f77b4'         # Blue (azimuth axis)
+        COLOR_EL = '#d62728'         # Red (elevation axis)
+        
+        # -------------------------------------------------------------------------
+        # Subplot 12a: Total Disturbance Torque - Azimuth
+        # -------------------------------------------------------------------------
+        ax12a.plot(t_dist, tau_d_az, color=COLOR_AZ, linewidth=2, alpha=0.9)
+        ax12a.fill_between(t_dist, tau_d_az, alpha=0.2, color=COLOR_AZ)
+        ax12a.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
+        
+        # Statistics annotations
+        mean_az = np.mean(tau_d_az)
+        std_az = np.std(tau_d_az)
+        ax12a.axhline(mean_az, color='gray', linewidth=2, linestyle=':', alpha=0.8, label=f'Mean = {mean_az:.2f} mN·m')
+        ax12a.axhline(mean_az + 2*std_az, color='orange', linewidth=2, linestyle='--', alpha=0.6, label=r'$\pm 2\sigma$')
+        ax12a.axhline(mean_az - 2*std_az, color='orange', linewidth=2, linestyle='--', alpha=0.6)
+        
+        ax12a.set_ylabel(r'Torque  [mN·m]', fontsize=14, fontweight='bold')
+        ax12a.set_xlabel('Time (s)', fontsize=14, fontweight='bold')
+        ax12a.set_title('(a) Total Environmental Disturbance Torque — Azimuth Axis', fontsize=14, fontweight='bold')
+        ax12a.legend(loc='upper right', fontsize=14, framealpha=0.95)
+        ax12a.grid(True, alpha=0.3, linestyle=':')
+        ax12a.set_xlim([t_dist[0], t_dist[-1]])
+        
+        # -------------------------------------------------------------------------
+        # Subplot 12b: Total Disturbance Torque - Elevation
+        # -------------------------------------------------------------------------
+        ax12b.plot(t_dist, tau_d_el, color=COLOR_EL, linewidth=1.2, alpha=0.9)
+        ax12b.fill_between(t_dist, tau_d_el, alpha=0.2, color=COLOR_EL)
+        ax12b.axhline(0, color='black', linewidth=0.8, linestyle='--', alpha=0.5)
+        
+        mean_el = np.mean(tau_d_el)
+        std_el = np.std(tau_d_el)
+        ax12b.axhline(mean_el, color='gray', linewidth=2, linestyle=':', alpha=0.8, label=f'Mean = {mean_el:.2f} mN·m')
+        ax12b.axhline(mean_el + 2*std_el, color='orange', linewidth=2, linestyle='--', alpha=0.6, label=r'$\pm 2\sigma$')
+        ax12b.axhline(mean_el - 2*std_el, color='orange', linewidth=2, linestyle='--', alpha=0.6)
+        
+        ax12b.set_ylabel(r'Torque  [mN·m]', fontsize=14, fontweight='bold')
+        ax12b.set_xlabel('Time (s)', fontsize=14, fontweight='bold')
+        ax12b.set_title('(b) Total Environmental Disturbance Torque — Elevation Axis', fontsize=14, fontweight='bold')
+        ax12b.legend(loc='upper right', fontsize=14, framealpha=0.95)
+        ax12b.grid(True, alpha=0.3, linestyle=':')
+        ax12b.set_xlim([t_dist[0], t_dist[-1]])
+        
+        # -------------------------------------------------------------------------
+        # Subplot 12c: Component Breakdown - Azimuth (Wind vs Vibration)
+        # -------------------------------------------------------------------------
+        ax12c.plot(t_dist, wind_az, color=COLOR_WIND, linewidth=2, label='Wind/Gust (Dryden)', alpha=0.9)
+        ax12c.plot(t_dist, vib_az, color=COLOR_VIB, linewidth=2, label='Structural Vibration', alpha=0.85)
+        ax12c.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
+        
+        ax12c.set_ylabel(r'Torque [mN·m]', fontsize=14, fontweight='bold')
+        ax12c.set_xlabel('Time (s)', fontsize=14, fontweight='bold')
+        ax12c.set_title('(c) Disturbance Components — Azimuth Axis', fontsize=14, fontweight='bold')
+        ax12c.legend(loc='best', fontsize=14, framealpha=0.95)
+        ax12c.grid(True, alpha=0.3, linestyle=':')
+        ax12c.set_xlim([t_dist[0], t_dist[-1]])
+        
+        # -------------------------------------------------------------------------
+        # Subplot 12d: Component Breakdown - Elevation (Wind vs Vibration)
+        # -------------------------------------------------------------------------
+        ax12d.plot(t_dist, wind_el, color=COLOR_WIND, linewidth=2, label='Wind/Gust (Dryden)', alpha=0.9)
+        ax12d.plot(t_dist, vib_el, color=COLOR_VIB, linewidth=2, label='Structural Vibration', alpha=0.85)
+        ax12d.axhline(0, color='black', linewidth=2, linestyle='--', alpha=0.5)
+        
+        ax12d.set_ylabel(r'Torque [mN·m]', fontsize=14, fontweight='bold')
+        ax12d.set_xlabel('Time (s)', fontsize=14, fontweight='bold')
+        ax12d.set_title('(d) Disturbance Components — Elevation Axis', fontsize=14, fontweight='bold')
+        ax12d.legend(loc='best', fontsize=14, framealpha=0.95)
+        ax12d.grid(True, alpha=0.3, linestyle=':')
+        ax12d.set_xlim([t_dist[0], t_dist[-1]])
+    
+    else:
+        # No disturbance data - show placeholder
+        for ax in [ax12a, ax12b, ax12c, ax12d]:
+            ax.text(0.5, 0.5, 
+                    'Environmental Disturbances Disabled\n\n'
+                    'Enable with:\n'
+                    '  environmental_disturbance_enabled=True\n'
+                    '  environmental_disturbance_config={...}',
+                    ha='center', va='center', transform=ax.transAxes, fontsize=14,
+                    fontfamily='monospace', bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
+            ax.set_xlabel('Time (s)', fontsize=14, fontweight='bold')
+            ax.set_ylabel('Torque [mN·m]', fontsize=14)
+        
+        ax12a.set_title('(a) Total Disturbance — Azimuth', fontsize=14, fontweight='bold')
+        ax12b.set_title('(b) Total Disturbance — Elevation', fontsize=14, fontweight='bold')
+        ax12c.set_title('(c) Wind & Vibration — Azimuth', fontsize=14, fontweight='bold')
+        ax12d.set_title('(d) Wind & Vibration — Elevation', fontsize=14, fontweight='bold')
+    
+    fig12.suptitle( r'(Dryden Wind Turbulence + PSD-Based Structural Vibration — Plant Injection Only)',
+                   fontsize=14, fontweight='bold')
+
+    # =============================================================================
+    # FIGURE 13: Disturbance Torque Statistical Distribution
+    # =============================================================================
+    if has_disturbance:
+        fig13, (ax13a, ax13b) = plt.subplots(2, 1, figsize=(10, 10), constrained_layout=True)
+        
+        # ------------------------------------------------------------------------- 
+        # Subplot 13a: Statistical Distribution
+        # -------------------------------------------------------------------------
+        # Create histogram comparison
+        bins = 40
+        ax13a.hist(tau_d_az, bins=bins, alpha=0.6, color=COLOR_AZ, label='Azimuth', density=True, edgecolor='white')
+        ax13a.hist(tau_d_el, bins=bins, alpha=0.6, color=COLOR_EL, label='Elevation', density=True, edgecolor='white')
+        
+        # Fit Gaussian overlay
+        from scipy.stats import norm
+        x_range_az = np.linspace(tau_d_az.min(), tau_d_az.max(), 100)
+        x_range_el = np.linspace(tau_d_el.min(), tau_d_el.max(), 100)
+        ax13a.plot(x_range_az, norm.pdf(x_range_az, mean_az, std_az), 
+                   color=COLOR_AZ, linewidth=2, linestyle='--', label=f'Az: N({mean_az:.1f}, {std_az:.1f}²)')
+        ax13a.plot(x_range_el, norm.pdf(x_range_el, mean_el, std_el), 
+                   color=COLOR_EL, linewidth=2, linestyle='--', label=f'El: N({mean_el:.1f}, {std_el:.1f}²)')
+        
+        ax13a.set_xlabel(r'Disturbance Torque $\tau_d$ [mN·m]', fontsize=14, fontweight='bold')
+        ax13a.set_ylabel('Probability Density', fontsize=14, fontweight='bold')
+        ax13a.set_title('(a) Disturbance Torque Statistical Distribution & Gaussian Fit', fontsize=14, fontweight='bold')
+        ax13a.legend(loc='upper right', fontsize=14, framealpha=0.95)
+        ax13a.grid(True, alpha=0.3, linestyle=':')
+        
+        # Add statistics text box
+        stats_text = (
+            f"Azimuth:\n"
+            f"  Mean: {mean_az:.2f} mN·m\n"
+            f"  Std:  {std_az:.2f} mN·m\n"
+            f"  Peak: {np.max(np.abs(tau_d_az)):.2f} mN·m\n\n"
+            f"Elevation:\n"
+            f"  Mean: {mean_el:.2f} mN·m\n"
+            f"  Std:  {std_el:.2f} mN·m\n"
+            f"  Peak: {np.max(np.abs(tau_d_el)):.2f} mN·m"
+        )
+        ax13a.text(0.02, 0.98, stats_text, transform=ax13a.transAxes, fontsize=14,
+                   verticalalignment='top', fontfamily='monospace',
+                   bbox=dict(boxstyle='round,pad=0.4', facecolor='white', alpha=0.9, edgecolor='gray'))
+        
+        # ------------------------------------------------------------------------- 
+        # Subplot 13b: Power Spectral Density
+        # -------------------------------------------------------------------------
+        from scipy import signal as sig
+        dt = t_dist[1] - t_dist[0] if len(t_dist) > 1 else 0.001
+        fs = 1.0 / dt
+        
+        # Compute PSD using Welch's method
+        nperseg = min(512, len(tau_d_az) // 4)
+        if nperseg > 8:
+            f_az, psd_az = sig.welch(tau_d_az, fs=fs, nperseg=nperseg)
+            f_el, psd_el = sig.welch(tau_d_el, fs=fs, nperseg=nperseg)
+            
+            ax13b.semilogy(f_az, psd_az, color=COLOR_AZ, linewidth=2, label='Azimuth', alpha=0.9)
+            ax13b.semilogy(f_el, psd_el, color=COLOR_EL, linewidth=2, label='Elevation', alpha=0.9)
+            
+            # Mark key frequency regions
+            ax13b.axvspan(0, 5, alpha=0.1, color='green', label='Low-freq (wind)')
+            ax13b.axvspan(10, 100, alpha=0.1, color='blue', label='Structural modes')
+            
+            ax13b.set_xlabel('Frequency [Hz]', fontsize=14, fontweight='bold')
+            ax13b.set_ylabel(r'PSD [(mN·m)$^2$/Hz]', fontsize=14, fontweight='bold')
+            ax13b.set_title('(b) Power Spectral Density of Disturbance Torques', fontsize=14, fontweight='bold')
+            ax13b.legend(loc='upper right', fontsize=14, framealpha=0.95)
+            ax13b.grid(True, alpha=0.3, linestyle=':', which='both')
+            ax13b.set_xlim([0, min(fs/2, 200)])
+        else:
+            ax13b.text(0.5, 0.5, 'Insufficient data for PSD\n(requires longer simulation)',
+                       ha='center', va='center', transform=ax13b.transAxes, fontsize=14)
+            ax13b.set_xlabel('Frequency [Hz]', fontsize=14)
+            ax13b.set_ylabel('PSD', fontsize=14)
+            ax13b.set_title('(b) Power Spectral Density', fontsize=14, fontweight='bold')
+        
+        fig13.suptitle('Figure 13: Environmental Disturbance Torque Statistics & Frequency Analysis', fontsize=14, fontweight='bold')
+    else:
+        # If no disturbance, create a placeholder fig13
+        fig13, (ax13a, ax13b) = plt.subplots(2, 1, figsize=(10, 10), constrained_layout=True)
+        ax13a.text(0.5, 0.5, 'No disturbance data available', ha='center', va='center', transform=ax13a.transAxes, fontsize=14)
+        ax13a.set_title('Figure 13a: Disturbance Statistics (No Data)', fontsize=14, fontweight='bold')
+        ax13b.text(0.5, 0.5, 'No disturbance data available', ha='center', va='center', transform=ax13b.transAxes, fontsize=14)
+        ax13b.set_title('Figure 13b: PSD Analysis (No Data)', fontsize=14, fontweight='bold')
+
+    # =============================================================================
     # Save all figures to disk (300 DPI, publication quality)
     # =============================================================================
-    print("\n✓ Generated 11 research-quality figures (300 DPI, LaTeX labels)")
+    print("\n[OK] Generated 13 research-quality figures (300 DPI, LaTeX labels)")
     print("Saving figures to disk...")
     if(1):
         output_dir = Path('figures_comparative')
@@ -836,9 +1066,11 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
         fig9.savefig(output_dir / 'fig9_fsm_performance.png', dpi=300, bbox_inches='tight')
         fig10.savefig(output_dir / 'fig10_internal_signals.png', dpi=300, bbox_inches='tight')
         fig11.savefig(output_dir / 'fig11_ekf_adaptive_tuning.png', dpi=300, bbox_inches='tight')
+        fig12.savefig(output_dir / 'fig12_environmental_disturbances.png', dpi=300, bbox_inches='tight')
+        fig13.savefig(output_dir / 'fig13_disturbance_statistics.png', dpi=300, bbox_inches='tight')
     
-        print(f"  ✓ Saved 9 figures to {output_dir.absolute()}/")
-        print("  ✓ Format: PNG, 300 DPI, bbox='tight' (publication-ready)")
+        print(f"  [OK] Saved 13 figures to {output_dir.absolute()}/")
+        print("  [OK] Format: PNG, 300 DPI, bbox='tight' (publication-ready)")
     #print("\n" + "="*70)
         print("FIGURE GENERATION COMPLETE")
         print("="*70)
@@ -846,6 +1078,527 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     plt.show()
     #fig1.show()   # shows only fig1
     #input("Press Enter to close...")
+
+
+# =============================================================================
+# FREQUENCY RESPONSE ANALYSIS SUITE
+# =============================================================================
+# Industrial-grade frequency response characterization for nonlinear gimbal
+# control systems using empirical sinusoidal sweep methodology.
+# 
+# This suite generates:
+# - Open-loop plant frequency response
+# - Closed-loop tracking response T(jω) for PID, FBL, FBL+NDOB
+# - Sensitivity function S(jω) for disturbance rejection analysis
+# - Comparative Bode plots for journal publication
+# =============================================================================
+
+class FrequencyResponseSimulator:
+    """
+    Simulation wrapper for frequency response analysis.
+    
+    This class provides the simulation callbacks needed by the frequency
+    sweep engine to extract frequency response data from closed-loop systems.
+    
+    It handles:
+    - Controller initialization for each architecture
+    - Sinusoidal reference/disturbance injection
+    - Time-domain signal collection
+    - Proper operating point linearization
+    
+    The key challenge with nonlinear systems is that frequency response
+    depends on the operating point and excitation amplitude. This simulator
+    uses small-signal excitation around a nominal operating point.
+    """
+    
+    def __init__(
+        self,
+        controller_type: ControllerType,
+        dt: float = 0.001,
+        operating_point_az: float = 0.0,
+        operating_point_el: float = 0.0
+    ):
+        """
+        Initialize simulator for a specific controller type.
+        
+        Parameters
+        ----------
+        controller_type : ControllerType
+            Type of controller to analyze
+        dt : float
+            Simulation timestep [s]
+        operating_point_az : float
+            Operating point azimuth [rad]
+        operating_point_el : float
+            Operating point elevation [rad]
+        """
+        self.controller_type = controller_type
+        self.dt = dt
+        self.op_az = operating_point_az
+        self.op_el = operating_point_el
+        
+        # Initialize plant dynamics
+        self.dynamics = GimbalDynamics(
+            pan_mass=1.0,
+            tilt_mass=0.5,
+            cm_r=0.0,
+            cm_h=0.0,
+            gravity=9.81
+        )
+        
+        # Initialize controller based on type
+        self._init_controller()
+        
+        # Friction coefficient (matched to plant)
+        self.friction_coef = 0.1  # N·m/(rad/s)
+    
+    def _init_controller(self) -> None:
+        """Initialize controller for the specified type."""
+        if self.controller_type == ControllerType.OPEN_LOOP:
+            self.controller = None
+        
+        elif self.controller_type == ControllerType.PID:
+            self.controller = CoarseGimbalController({
+                'kp': [3.514, 1.320],
+                'ki': [15.464, 4.148],
+                'kd': [0.293, 0.059418],
+                'tau_max': [10.0, 10.0],
+                'tau_min': [-10.0, -10.0],
+                'enable_derivative': True
+            })
+        
+        elif self.controller_type == ControllerType.FBL:
+            self.controller = FeedbackLinearizationController(
+                config={
+                    'kp': [400.0, 400.0],
+                    'kd': [40.0, 40.0],
+                    'ki': [0.0, 0.0],
+                    'enable_integral': False,
+                    'tau_max': [10.0, 10.0],
+                    'tau_min': [-10.0, -10.0],
+                    'friction_az': 0.1,
+                    'friction_el': 0.1,
+                    'enable_disturbance_compensation': False
+                },
+                dynamics_model=self.dynamics,
+                ndob=None
+            )
+        
+        elif self.controller_type == ControllerType.FBL_NDOB:
+            ndob_config = NDOBConfig(
+                lambda_az=50.0,
+                lambda_el=50.0,
+                d_max=0.5,
+                enable=True
+            )
+            ndob = NonlinearDisturbanceObserver(self.dynamics, ndob_config)
+            
+            self.controller = FeedbackLinearizationController(
+                config={
+                    'kp': [400.0, 400.0],
+                    'kd': [40.0, 40.0],
+                    'ki': [0.0, 0.0],
+                    'enable_integral': False,
+                    'tau_max': [10.0, 10.0],
+                    'tau_min': [-10.0, -10.0],
+                    'friction_az': 0.1,
+                    'friction_el': 0.1,
+                    'enable_disturbance_compensation': False
+                },
+                dynamics_model=self.dynamics,
+                ndob=ndob
+            )
+    
+    def simulate_sweep(
+        self,
+        omega: float,
+        duration: float,
+        amplitude: float,
+        sweep_type: SweepType,
+        axis: str
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Run closed-loop simulation with sinusoidal excitation.
+        
+        Parameters
+        ----------
+        omega : float
+            Excitation frequency [rad/s]
+        duration : float
+            Total simulation time [s]
+        amplitude : float
+            Excitation amplitude [rad] for reference, [N·m] for disturbance
+        sweep_type : SweepType
+            Type of excitation (reference tracking or disturbance)
+        axis : str
+            Axis to excite ('az' or 'el')
+            
+        Returns
+        -------
+        Tuple[np.ndarray, np.ndarray, np.ndarray]
+            (time, input_signal, output_signal)
+        """
+        # Time vector
+        n_steps = int(duration / self.dt)
+        t = np.arange(n_steps) * self.dt
+        
+        # Initialize state at operating point
+        if axis == 'az':
+            q = np.array([self.op_az, self.op_el])
+        else:
+            q = np.array([self.op_az, self.op_el])
+        dq = np.zeros(2)
+        
+        # Preallocate output arrays
+        u_signal = np.zeros(n_steps)  # Input (reference or disturbance)
+        y_signal = np.zeros(n_steps)  # Output (position or error)
+        
+        # Reset controller state
+        if self.controller is not None:
+            self.controller.reset()
+        
+        # Axis index
+        axis_idx = 0 if axis == 'az' else 1
+        
+        # Simulation loop
+        for k in range(n_steps):
+            # Generate sinusoidal excitation
+            sin_value = amplitude * np.sin(omega * t[k])
+            
+            if sweep_type == SweepType.REFERENCE_TRACKING:
+                # Reference tracking: sinusoidal reference
+                if axis == 'az':
+                    ref = np.array([self.op_az + sin_value, self.op_el])
+                else:
+                    ref = np.array([self.op_az, self.op_el + sin_value])
+                disturbance = np.zeros(2)
+                u_signal[k] = sin_value
+                
+            elif sweep_type == SweepType.DISTURBANCE_INJECTION:
+                # Disturbance rejection: inject torque disturbance
+                ref = np.array([self.op_az, self.op_el])
+                disturbance = np.zeros(2)
+                disturbance[axis_idx] = sin_value * 0.1  # Scale for torque
+                u_signal[k] = sin_value * 0.1
+            else:
+                ref = np.array([self.op_az, self.op_el])
+                disturbance = np.zeros(2)
+                u_signal[k] = 0
+            
+            # Compute control action
+            if self.controller_type == ControllerType.OPEN_LOOP:
+                tau = np.zeros(2)
+            elif self.controller_type == ControllerType.PID:
+                tau, _ = self.controller.compute_control(
+                    reference=ref,
+                    measurement=q,
+                    dt=self.dt,
+                    velocity_estimate=dq
+                )
+            else:
+                # FBL or FBL+NDOB
+                state_estimate = {
+                    'theta_az': q[0],
+                    'theta_el': q[1],
+                    'theta_dot_az': dq[0],
+                    'theta_dot_el': dq[1],
+                    'dist_az': 0.0,
+                    'dist_el': 0.0
+                }
+                dq_ref = np.zeros(2)  # Zero velocity reference for position tracking
+                tau, _ = self.controller.compute_control(
+                    q_ref=ref,
+                    dq_ref=dq_ref,
+                    state_estimate=state_estimate,
+                    dt=self.dt,
+                    ddq_ref=None
+                )
+            
+            # Apply disturbance (plant only, not seen by controller)
+            tau_applied = tau + disturbance
+            
+            # Add friction (plant-side only)
+            tau_net = tau_applied - self.friction_coef * dq
+            
+            # Forward dynamics
+            ddq = self.dynamics.compute_forward_dynamics(q, dq, tau_net)
+            
+            # Integrate (forward Euler)
+            dq = dq + ddq * self.dt
+            q = q + dq * self.dt
+            
+            # Record output
+            if sweep_type == SweepType.REFERENCE_TRACKING:
+                # Output is position relative to operating point
+                y_signal[k] = q[axis_idx] - (self.op_az if axis == 'az' else self.op_el)
+            else:
+                # Output is error (for sensitivity: disturbance → error)
+                y_signal[k] = (ref[axis_idx] - q[axis_idx])
+        
+        return t, u_signal, y_signal
+
+
+def run_frequency_response_analysis(
+    f_min: float = 0.1,
+    f_max: float = 50.0,
+    n_points: int = 30,
+    amplitude_deg: float = 1.0,
+    axis: str = 'az'
+) -> Dict[ControllerType, FrequencyResponseData]:
+    """
+    Execute comprehensive frequency response analysis for all controllers.
+    
+    This function generates publication-quality Bode plots comparing:
+    - Open-loop plant response
+    - PID closed-loop response
+    - FBL closed-loop response
+    - FBL+NDOB closed-loop response
+    
+    The analysis reveals:
+    1. Bandwidth improvement from each controller
+    2. Disturbance rejection frequency bands
+    3. High-frequency noise attenuation
+    4. Stability margins
+    
+    Parameters
+    ----------
+    f_min : float
+        Minimum frequency [Hz]
+    f_max : float
+        Maximum frequency [Hz]
+    n_points : int
+        Number of frequency points
+    amplitude_deg : float
+        Excitation amplitude [degrees]
+    axis : str
+        Axis to analyze ('az' or 'el')
+        
+    Returns
+    -------
+    Dict[ControllerType, FrequencyResponseData]
+        Frequency response data for each controller
+    """
+    print("\n" + "=" * 80)
+    print("FREQUENCY RESPONSE ANALYSIS SUITE")
+    print("=" * 80)
+    print("Empirical Sinusoidal Sweep for Nonlinear Control Systems")
+    print("Methodology: DFT Correlation at Excitation Frequency")
+    print("=" * 80)
+    
+    # Configure sweep
+    sweep_config = FrequencySweepConfig(
+        f_min=f_min,
+        f_max=f_max,
+        n_points=n_points,
+        amplitude=np.deg2rad(amplitude_deg),
+        settling_cycles=6,
+        measurement_cycles=12,
+        max_settling_time=15.0,
+        min_measurement_time=0.5,
+        use_hanning_window=True,
+        dt=0.001
+    )
+    
+    # Controller types to analyze
+    controller_types = [
+        ControllerType.OPEN_LOOP,
+        ControllerType.PID,
+        ControllerType.FBL,
+        ControllerType.FBL_NDOB
+    ]
+    
+    all_results = {}
+    
+    for ctrl_type in controller_types:
+        print(f"\n{'='*60}")
+        print(f"Analyzing: {ctrl_type.name}")
+        print(f"{'='*60}")
+        
+        # Create simulator for this controller
+        simulator = FrequencyResponseSimulator(
+            controller_type=ctrl_type,
+            dt=sweep_config.dt
+        )
+        
+        # Create sweep engine
+        engine = FrequencySweepEngine(sweep_config, verbose=True)
+        
+        # Run closed-loop tracking sweep
+        print("\n[Phase 1] Closed-Loop Tracking Response T(jω)")
+        tracking_results = engine.run_sweep(
+            simulator.simulate_sweep,
+            SweepType.REFERENCE_TRACKING,
+            axis
+        )
+        
+        # Run sensitivity sweep (disturbance → error)
+        print("\n[Phase 2] Sensitivity Function S(jω)")
+        engine2 = FrequencySweepEngine(sweep_config, verbose=True)
+        sensitivity_results = engine2.run_sweep(
+            simulator.simulate_sweep,
+            SweepType.DISTURBANCE_INJECTION,
+            axis
+        )
+        
+        # Package results
+        n = len(tracking_results)
+        freq_data = FrequencyResponseData(
+            controller_type=ctrl_type,
+            axis=axis,
+            frequencies_hz=np.array([r.frequency_hz for r in tracking_results]),
+            frequencies_rad=np.array([r.frequency_rad for r in tracking_results]),
+            closed_loop_gain_db=np.array([r.gain_db for r in tracking_results]),
+            closed_loop_phase_deg=np.array([r.phase_deg for r in tracking_results]),
+            sensitivity_gain_db=np.array([r.gain_db for r in sensitivity_results]),
+            sensitivity_phase_deg=np.array([r.phase_deg for r in sensitivity_results]),
+            control_effort_gain_db=np.zeros(n),  # Placeholder
+            coherence=np.array([r.coherence for r in tracking_results]),
+            bandwidth_hz=0.0,
+            peak_sensitivity=1.0,
+            metadata={'axis': axis, 'n_points': n}
+        )
+        
+        # Compute derived metrics
+        freq_data = _compute_derived_metrics(freq_data)
+        
+        all_results[ctrl_type] = freq_data
+        
+        print(f"\n[OK] {ctrl_type.name} Complete:")
+        print(f"     Bandwidth: {freq_data.bandwidth_hz:.2f} Hz")
+        print(f"     Peak Sensitivity Ms: {freq_data.peak_sensitivity:.2f}")
+    
+    return all_results
+
+
+def _compute_derived_metrics(data: FrequencyResponseData) -> FrequencyResponseData:
+    """Compute bandwidth and peak sensitivity from frequency response data."""
+    # Bandwidth: -3dB crossing
+    valid = ~np.isnan(data.closed_loop_gain_db)
+    if np.any(valid):
+        dc_gain = data.closed_loop_gain_db[valid][0]
+        threshold = dc_gain - 3.0
+        below = data.closed_loop_gain_db < threshold
+        crossings = np.where(below & valid)[0]
+        if len(crossings) > 0:
+            data.bandwidth_hz = data.frequencies_hz[crossings[0]]
+        else:
+            data.bandwidth_hz = data.frequencies_hz[-1]
+    
+    # Peak sensitivity
+    valid_sens = ~np.isnan(data.sensitivity_gain_db)
+    if np.any(valid_sens):
+        peak_db = np.max(data.sensitivity_gain_db[valid_sens])
+        data.peak_sensitivity = 10 ** (peak_db / 20.0)
+    
+    return data
+
+
+def plot_frequency_response_comparison(
+    results: Dict[ControllerType, FrequencyResponseData],
+    save_figures: bool = True
+) -> None:
+    """
+    Generate publication-quality frequency response comparison plots.
+    
+    Creates 5 figures:
+    1. Bode Plot (Magnitude & Phase) - All Controllers
+    2. Sensitivity Function Comparison
+    3. Disturbance Rejection Band Analysis
+    4. Performance Metrics Summary
+    5. Coherence Quality Verification
+    
+    Parameters
+    ----------
+    results : Dict[ControllerType, FrequencyResponseData]
+        Frequency response data from analysis
+    save_figures : bool
+        Save figures to disk
+    """
+    print("\n" + "=" * 70)
+    print("GENERATING FREQUENCY RESPONSE PLOTS")
+    print("=" * 70)
+    
+    # Create plotter
+    config = PlotConfig(
+        style=PlotStyle.PUBLICATION,
+        output_dir=Path('figures_bode'),
+        dpi=300,
+        save_format='png'
+    )
+    plotter = FrequencyResponsePlotter(config)
+    
+    # Add all results
+    for ctrl_type, data in results.items():
+        plotter.add_response(data)
+    
+    # Generate plots
+    print("\n[1/5] Generating Bode Plot...")
+    plotter.plot_bode_comparison(
+        title='Closed-Loop Frequency Response: PID vs FBL vs FBL+NDOB',
+        save=save_figures
+    )
+    
+    print("[2/5] Generating Sensitivity Function Plot...")
+    plotter.plot_sensitivity_comparison(
+        title='Sensitivity Function S(jω) - Disturbance Rejection Analysis',
+        save=save_figures
+    )
+    
+    print("[3/5] Generating Disturbance Rejection Bands...")
+    plotter.plot_disturbance_rejection_bands(
+        title='Frequency-Domain Disturbance Rejection by Controller Type',
+        save=save_figures
+    )
+    
+    print("[4/5] Generating Coherence Quality Plot...")
+    plotter.plot_coherence_overlay(
+        title='Measurement Quality Verification (Coherence γ²)',
+        save=save_figures
+    )
+    
+    print("[5/5] Generating Performance Summary...")
+    plotter.plot_performance_summary(save=save_figures)
+    
+    # Save data to JSON
+    print("\n[DATA] Saving frequency response data...")
+    logger = FrequencyResponseLogger(LoggerConfig(
+        output_dir=Path('frequency_response_data'),
+        save_json=True,
+        save_csv=True
+    ))
+    logger.add_results_dict(results)
+    logger.set_sweep_config({
+        'f_min': results[list(results.keys())[0]].frequencies_hz[0],
+        'f_max': results[list(results.keys())[0]].frequencies_hz[-1],
+        'n_points': len(results[list(results.keys())[0]].frequencies_hz),
+    })
+    logger.save()
+    
+    # Print summary table
+    print("\n" + "=" * 90)
+    print("FREQUENCY-DOMAIN PERFORMANCE SUMMARY")
+    print("=" * 90)
+    print(f"{'Controller':<15} {'Bandwidth [Hz]':>15} {'Peak Ms':>12} {'Ms [dB]':>10} {'DC Gain [dB]':>14}")
+    print("-" * 90)
+    
+    for ctrl_type, data in results.items():
+        dc_gain = data.closed_loop_gain_db[0] if len(data.closed_loop_gain_db) > 0 else np.nan
+        ms_db = 20 * np.log10(data.peak_sensitivity + 1e-12)
+        print(f"{ctrl_type.name:<15} {data.bandwidth_hz:>15.2f} {data.peak_sensitivity:>12.2f} "
+              f"{ms_db:>10.1f} {dc_gain:>14.1f}")
+    
+    print("=" * 90)
+    print("\nKey Insights:")
+    print("  • Bandwidth: Higher = faster response, better command tracking")
+    print("  • Peak Sensitivity Ms: Lower = better robustness (target < 2.0)")
+    print("  • DC Gain ≈ 0 dB: Good steady-state tracking")
+    print("  • Sensitivity < 0 dB: Disturbances attenuated in that band")
+    print("=" * 90)
+    
+    if save_figures:
+        print(f"\n[OK] All figures saved to figures_bode/")
+        print("[OK] Data saved to frequency_response_data/")
+
 
 def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     """
@@ -886,7 +1639,7 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     
     # Signal characteristics
     target_amplitude = 90.0 # degrees
-    target_period = 20   # seconds
+    target_period = 30   # seconds
     target_reachangle = 90.0  # degrees - for hybridsig only
     
     # =============================================================================
@@ -907,8 +1660,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
             'gimbal_arm': 0.15,
         },
         'vibration': {
-            'enabled': False,
-            'start_time': 0.0,
+            'enabled': True,
+            'start_time': 3.0,
             'modal_frequencies': [15.0, 45.0, 80.0],
             'modal_dampings': [0.02, 0.015, 0.01],
             'modal_amplitudes': [1e-3, 5e-4, 2e-4],
@@ -1037,7 +1790,7 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
         enable_visualization=False,
         enable_plotting=True,             # Disable automatic plots
         real_time_factor=0.0,
-        vibration_enabled=True,
+        vibration_enabled=False,
         vibration_config={
             'start_time': 5.0,
             'frequency_hz': 10.0,
@@ -1250,7 +2003,7 @@ if __name__ == '__main__':
             'turbulence_intensity': 0.15, # σ_u/V_mean ratio (0.1=light, 0.2=moderate)
             'mean_velocity': 8.0,         # Mean wind speed V_mean [m/s]
             'direction_deg': 45.0,        # Wind direction (affects both axes)
-            'start_time': 2.0             # Delay onset [s]
+            'start_time': 5.0             # Delay onset [s]
         },
         'vibration': {
             'enabled': True,
@@ -1258,11 +2011,11 @@ if __name__ == '__main__':
             'modal_dampings': [0.02, 0.015, 0.01],    # Low damping typical
             'modal_amplitudes': [1e-3, 5e-4, 2e-4],   # PSD amplitudes [(m/s²)²/Hz]
             'inertia_coupling': 0.1,                  # Accel→torque [N·m/(m/s²)]
-            'start_time': 0.0
+            'start_time': 7.0
         },
         'structural_noise': {
             'enabled': True,
-            'std': 0.005,        # Noise intensity σ [N·m]
+            'std': 0.01,        # Noise intensity σ [N·m]
             'freq_low': 100.0,   # Lower cutoff [Hz]
             'freq_high': 500.0   # Upper cutoff [Hz]
         },
@@ -1274,7 +2027,7 @@ if __name__ == '__main__':
     # =========================================================================
     
     # 1. Constant Target (Legacy)
-    # run_three_way_comparison(signal_type='constant')
+    #run_three_way_comparison(signal_type='constant',disturbance_config=example_disturbance_config)
     
     # 2. Square Wave Target
     # run_three_way_comparison(signal_type='square')
@@ -1286,8 +2039,35 @@ if __name__ == '__main__':
     # run_three_way_comparison(signal_type='cosine')
     
     # 5. Hybrid Signal (Sine wave until reach angle, then hold)
-    run_three_way_comparison(signal_type='hybridsig')
+    #run_three_way_comparison(signal_type='hybridsig')
     
     # 6. With Environmental Disturbances - demonstrates NDOB rejection capability
     # Uncomment below to test with Dryden wind + structural vibration:
-    # run_three_way_comparison(signal_type='hybridsig', disturbance_config=example_disturbance_config)
+    run_three_way_comparison(signal_type='hybridsig', disturbance_config=example_disturbance_config)
+    
+    # =========================================================================
+    # FREQUENCY RESPONSE ANALYSIS
+    # =========================================================================
+    # Generate publication-quality Bode plots showing frequency-domain
+    # performance of all three control architectures.
+    #
+    # This analysis reveals:
+    #   - Closed-loop bandwidth for each controller
+    #   - Disturbance rejection frequency bands  
+    #   - Noise attenuation at high frequencies
+    #   - Stability margins (gain & phase)
+    #
+    # The plots are essential for understanding WHICH frequency bands
+    # of disturbances are rejected by each controller architecture.
+    #
+    # UNCOMMENT to run frequency response analysis:
+    # (Note: Takes ~5-10 minutes depending on n_points)
+    #
+    # results = run_frequency_response_analysis(
+    #     f_min=0.1,        # Min frequency [Hz]
+    #     f_max=50.0,       # Max frequency [Hz]  
+    #     n_points=30,      # Number of frequency points
+    #     amplitude_deg=1.0, # Excitation amplitude [deg]
+    #     axis='az'         # Axis to analyze
+    # )
+    # plot_frequency_response_comparison(results, save_figures=True)

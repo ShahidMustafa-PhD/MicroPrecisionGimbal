@@ -32,8 +32,8 @@ class GimbalDynamics:
     def __init__(self, 
                  pan_mass: float = 0.5, 
                  tilt_mass: float = 0.25,
-                 cm_r: float = 0.002,
-                 cm_h: float = 0.005,
+                 cm_r: float = 0.0,
+                 cm_h: float = 0.0,
                  gravity: float = 9.81):
         """
         Initialize the Gimbal Dynamics model with physical parameters.
