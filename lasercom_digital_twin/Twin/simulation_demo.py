@@ -283,12 +283,13 @@ class SimulationOrchestrator:
         
     def setup_camera(self):
         """Configure camera view."""
+        # Center on gimbal mid-height (110mm pivot point)
         self.plotter.camera_position = [
-            (350, -280, 180),  # Camera location
-            (0, 0, 40),         # Focal point
+            (350, -280, 220),  # Camera location (raised Z)
+            (0, 0, 110),        # Focal point (yoke pivot height)
             (0, 0, 1)           # Up vector
         ]
-        self.plotter.camera.zoom(1.3)
+        self.plotter.camera.zoom(1.1)
     
     def add_ui_overlays(self, t: float, az: float, el: float, frame: int, total_frames: int):
         """
@@ -367,7 +368,7 @@ class SimulationOrchestrator:
             If True, save animation to GIF
         """
         # Simulation parameters
-        dt = 0.033  # ~30 FPS
+        dt = 0.1  # ~30 FPS
         time_steps = np.arange(0, duration, dt)
         total_frames = len(time_steps)
         
@@ -428,7 +429,7 @@ def main():
     """Main entry point for simulation demo."""
     
     # === Configuration ===
-    DURATION = 1.0  # seconds
+    DURATION = 2.0  # seconds
     TRAJECTORY = 'sinusoidal'  # Options: 'sinusoidal', 'conical', 'step_dwell', 'spiral'
     SAVE_ANIMATION = True
     OFFLINE_MODE = True  # Set to False for interactive window
@@ -440,7 +441,7 @@ def main():
     print("═" * 60)
     
     orchestrator = SimulationOrchestrator(
-        window_size=(1920, 1080),
+        window_size=(1920, 1620),
         offline_mode=OFFLINE_MODE
     )
     
