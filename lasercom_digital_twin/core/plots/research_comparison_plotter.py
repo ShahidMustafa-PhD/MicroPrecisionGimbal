@@ -5,7 +5,7 @@ This module provides publication-quality visualization for comparing
 PID, Feedback Linearization (FBL), and FBL+NDOB controllers in the
 lasercom gimbal pointing system.
 
-Figures Generated
+Figures GeneratedF
 -----------------
 1. Angular Position Tracking (Az & El)
 2. Tracking Error with Handover Thresholds (THE MONEY SHOT)
@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple, List
 import numpy as np
 import matplotlib.pyplot as plt
+import time
 
 from lasercom_digital_twin.core.plots.style_config import (
     PlotStyleConfig,
@@ -43,6 +44,11 @@ from lasercom_digital_twin.core.plots.style_config import (
     configure_matplotlib_defaults
 )
 from lasercom_digital_twin.core.plots.metrics_utils import compute_tracking_metrics
+from lasercom_digital_twin.core.plots.interactive_plotter import (
+    InteractiveFigureManager,
+    InteractiveStyleConfig,
+    make_interactive
+)
 
 
 class ResearchComparisonPlotter:
@@ -74,12 +80,21 @@ class ResearchComparisonPlotter:
         self,
         style: Optional[PlotStyleConfig] = None,
         save_figures: bool = True,
-        show_figures: bool = True
+        show_figures: bool = True,
+        interactive: bool = True
     ):
-        """Initialize plotter with style configuration."""
+        """Initialize plotter with style configuration.
+        
+        Parameters
+        ----------
+        interactive : bool
+            If True, all figures will be interactive with zoom regions,
+            annotations, and professional editing capabilities
+        """
         self.style = style or PlotStyleConfig()
         self.save_figures = save_figures
         self.show_figures = show_figures
+        self.interactive = interactive
         
         # Ensure output directory exists
         if self.save_figures:
@@ -87,6 +102,69 @@ class ResearchComparisonPlotter:
         
         # Store generated figures for access
         self.figures: Dict[str, plt.Figure] = {}
+        
+        # Store interactive managers for each figure
+        self.interactive_managers: Dict[str, InteractiveFigureManager] = {}
+    
+    def _get_layout_mode(self):
+        """Determine layout mode based on interactive setting.
+        
+        Returns
+        -------
+        bool or None
+            False if interactive (disable constrained_layout for toolbar),
+            True if non-interactive (use matplotlib's automatic layout)
+        """
+        # Interactive mode requires manual layout for toolbar space
+        # Non-interactive mode can use constrained_layout for better spacing
+        return False if self.interactive else True
+    
+    def _make_figure_interactive(self, fig: plt.Figure, axes, fig_name: str) -> InteractiveFigureManager:
+        """Make a figure interactive with enhanced controls.
+        
+        Uses the make_interactive() factory function following the standard pattern
+        from test_zoom_deletion.py for consistent behavior across the project.
+        
+        CRITICAL: Figures must be created with constrained_layout=False BEFORE
+        calling this method. The InteractiveFigureManager checks layout mode
+        during __init__ and will disable toolbar if constrained_layout is active.
+        
+        Parameters
+        ----------
+        fig : plt.Figure
+            The matplotlib figure to enhance (must have constrained_layout=False)
+        axes : plt.Axes or list of plt.Axes
+            The axes in the figure
+        fig_name : str
+            Name identifier for the figure
+            
+        Returns
+        -------
+        InteractiveFigureManager
+            The interactive manager instance
+        """
+        if not self.interactive:
+            return None
+        
+        # Use make_interactive() factory function (standard pattern from test_zoom_deletion.py)
+        # This ensures consistent behavior across all interactive plots in the project
+        # Pass style parameters as kwargs, not as a style object
+        manager = make_interactive(
+            fig=fig,
+            axes=axes,
+            save_dir=str(self.style.output_dir / 'interactive'),
+            # Style parameters passed as kwargs
+            vline_color='#e74c3c',         # Red vertical lines
+            hline_color='#3498db',         # Blue horizontal lines
+            zoom_rect_color='#2ecc71',     # Green zoom regions
+            selection_color='#ff6600',     # Orange selection
+            annotation_linewidth=1.5,
+            selection_linewidth=3.0,
+            zoom_rect_alpha=0.3,
+            save_dpi=300,                  # Match research quality
+        )
+        
+        return manager
     
     def plot_all(
         self,
@@ -146,20 +224,68 @@ class ResearchComparisonPlotter:
         self.figures['fig12_disturbance'] = self._plot_disturbance_torques()
         self.figures['fig13_statistics'] = self._plot_disturbance_statistics()
         
-        # Save figures
+        # Save figures FIRST (before making interactive) to get clean PDFs without buttons
         if self.save_figures:
             self._save_all_figures()
         
+        # Make figures interactive AFTER saving (so buttons don't appear in saved PDFs)
+        if self.interactive:
+            print("\n[OK] Enhancing figures with interactive capabilities...")
+            print("     - Zoom regions (Z key)")
+            print("     - Vertical/horizontal lines (V/H keys)")
+            print("     - Mouse-based selection and deletion")
+            print("     - Professional annotation tools")
+            print("     - Press ? in any figure for full help")
+            
+            # Make each figure interactive with its axes
+            fig_axes_map = {
+                'fig1_position': self.figures['fig1_position'].get_axes(),
+                'fig2_error': self.figures['fig2_error'].get_axes(),
+                'fig3_torque': self.figures['fig3_torque'].get_axes(),
+                'fig4_velocity': self.figures['fig4_velocity'].get_axes(),
+                'fig5_phase': self.figures['fig5_phase'].get_axes(),
+                'fig6_los': self.figures['fig6_los'].get_axes(),
+                'fig7_summary': self.figures['fig7_summary'].get_axes(),
+                'fig8_ekf': self.figures['fig8_ekf'].get_axes(),
+                'fig9_fsm': self.figures['fig9_fsm'].get_axes(),
+                'fig10_internal': self.figures['fig10_internal'].get_axes(),
+                'fig11_ekf_diag': self.figures['fig11_ekf_diag'].get_axes(),
+                'fig12_disturbance': self.figures['fig12_disturbance'].get_axes(),
+                'fig13_statistics': self.figures['fig13_statistics'].get_axes(),
+            }
+            
+            for fig_name, axes in fig_axes_map.items():
+                if fig_name in self.figures:
+                    manager = self._make_figure_interactive(
+                        self.figures[fig_name],
+                        axes,
+                        fig_name
+                    )
+                    if manager:
+                        self.interactive_managers[fig_name] = manager
+            
+            print(f"[OK] Made {len(self.interactive_managers)} figures interactive")
+        
         # Show figures
         if self.show_figures:
-            plt.show()
+            if self.interactive and len(self.interactive_managers) > 0:
+                print("\n[OK] Displaying interactive figures...")
+                print("     Press Ctrl+C in terminal to close all figures")
+                print("     Interactive controls: Z(zoom), V(vline), H(hline), U(undo), S(save)")
+                print("     Click green rectangles to select (orange), then press Delete")
+                # Use first manager's show() to display all figures
+                # (they all share the same matplotlib backend)
+                first_manager = next(iter(self.interactive_managers.values()))
+                first_manager.show()
+            else:
+                plt.show()
         
         return self.figures
     
     def _plot_position_tracking(self) -> plt.Figure:
         """Figure 1: Gimbal Position Tracking (Az & El with Commands)."""
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self.style.get_figure_size('2x1'),
-                                        sharex=True, constrained_layout=True)
+                                        sharex=True, constrained_layout=self._get_layout_mode())
         
         lw = self.style.linewidth_primary
         alpha = self.style.alpha_primary
@@ -222,7 +348,7 @@ class ResearchComparisonPlotter:
     def _plot_tracking_error(self) -> plt.Figure:
         """Figure 2: Tracking Error with Handover Thresholds (THE MONEY SHOT)."""
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self.style.get_figure_size('2x1'),
-                                        sharex=True, constrained_layout=True)
+                                        sharex=True, constrained_layout=self._get_layout_mode())
         
         lw = self.style.linewidth_primary
         alpha = self.style.alpha_primary
@@ -249,10 +375,10 @@ class ResearchComparisonPlotter:
                  color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB', alpha=alpha)
         
         # Threshold lines
-        ax1.axhline(0.8, color=ControllerColors.HANDOVER, linewidth=lw, linestyle=':',
-                    alpha=self.style.alpha_threshold, label='FSM Handover (0.8°)')
-        ax1.axhline(1.0, color=ControllerColors.THRESHOLD, linewidth=lw, linestyle=':',
-                    alpha=0.5, label='Performance Limit (1.0°)')
+        ax1.axhline(1, color=ControllerColors.HANDOVER, linewidth=lw, linestyle='-',
+                    alpha=self.style.alpha_threshold, label='FSM Handover (1.0°)')
+        #ax1.axhline(1.0, color=ControllerColors.THRESHOLD, linewidth=lw, linestyle='-',
+                    #alpha=0.5, label='Performance Limit (1.0°)')
         
         ax1.set_ylabel('Azimuth Error [deg]', fontsize=self.style.axis_label_fontsize,
                        fontweight='bold')
@@ -282,10 +408,10 @@ class ResearchComparisonPlotter:
         ax2.plot(self._t_ndob, np.rad2deg(error_el_ndob),
                  color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB', alpha=alpha)
         
-        ax2.axhline(0.8, color=ControllerColors.HANDOVER, linewidth=lw, linestyle=':',
-                    alpha=self.style.alpha_threshold, label='FSM Handover (0.8°)')
-        ax2.axhline(1.0, color=ControllerColors.THRESHOLD, linewidth=lw, linestyle=':',
-                    alpha=0.5, label='Performance Limit (1.0°)')
+        ax2.axhline(1, color=ControllerColors.HANDOVER, linewidth=lw, linestyle='-',
+                    alpha=self.style.alpha_threshold, label='FSM Handover (1.0°)')
+       # ax2.axhline(1.0, color=ControllerColors.THRESHOLD, linewidth=lw, linestyle='-',
+                    #alpha=0.5, label='Performance Limit (1.0°)')
         
         ax2.set_ylabel('Elevation Error [deg]', fontsize=self.style.axis_label_fontsize,
                        fontweight='bold')
@@ -304,7 +430,7 @@ class ResearchComparisonPlotter:
     def _plot_control_torques(self) -> plt.Figure:
         """Figure 3: Control Torques & NDOB Disturbance Estimation."""
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=self.style.get_figure_size('2x2'),
-                                                      constrained_layout=True)
+                                                      constrained_layout=self._get_layout_mode())
         
         lw = self.style.linewidth_primary
         alpha = self.style.alpha_primary
@@ -395,7 +521,7 @@ class ResearchComparisonPlotter:
     def _plot_velocities(self) -> plt.Figure:
         """Figure 4: Gimbal Angular Velocities."""
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self.style.get_figure_size('2x1'),
-                                        sharex=True, constrained_layout=True)
+                                        sharex=True, constrained_layout=self._get_layout_mode())
         
         lw = self.style.linewidth_primary
         alpha = self.style.alpha_primary
@@ -434,7 +560,7 @@ class ResearchComparisonPlotter:
     def _plot_phase_plane(self) -> plt.Figure:
         """Figure 5: Phase Plane Trajectories."""
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=self.style.get_figure_size('1x2'),
-                                        constrained_layout=True)
+                                        constrained_layout=self._get_layout_mode())
         
         lw = self.style.linewidth_primary
         
@@ -477,7 +603,7 @@ class ResearchComparisonPlotter:
     def _plot_los_errors(self) -> plt.Figure:
         """Figure 6: Line-of-Sight Errors."""
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=self.style.get_figure_size('3x1'),
-                                             sharex=True, constrained_layout=True)
+                                             sharex=True, constrained_layout=self._get_layout_mode())
         
         lw = self.style.linewidth_primary
         alpha = self.style.alpha_primary
@@ -538,7 +664,7 @@ class ResearchComparisonPlotter:
     def _plot_performance_summary(self) -> plt.Figure:
         """Figure 7: Performance Summary Bar Charts."""
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=self.style.get_figure_size('2x2'),
-                                                      constrained_layout=True)
+                                                      constrained_layout=self._get_layout_mode())
         
         # Compute metrics
         metrics_pid = compute_tracking_metrics(self._results_pid, self._target_az_rad, self._target_el_rad)
@@ -611,7 +737,7 @@ class ResearchComparisonPlotter:
     def _plot_ekf_performance(self) -> plt.Figure:
         """Figure 8: EKF State Estimation Performance."""
         fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=self.style.get_figure_size('2x2'),
-                                                      constrained_layout=True)
+                                                      constrained_layout=self._get_layout_mode())
         
         lw = self.style.linewidth_primary
         alpha = self.style.alpha_primary
@@ -699,7 +825,7 @@ class ResearchComparisonPlotter:
     def _plot_fsm_performance(self) -> plt.Figure:
         """Figure 9: Fine Steering Mirror Performance."""
         fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self.style.get_figure_size('2x1'),
-                                        sharex=True, constrained_layout=True)
+                                        sharex=True, constrained_layout=self._get_layout_mode())
         
         lw = self.style.linewidth_primary
         alpha = self.style.alpha_primary
@@ -750,7 +876,7 @@ class ResearchComparisonPlotter:
     def _plot_internal_signals(self) -> plt.Figure:
         """Figure 10: Internal Control Signal & Disturbance Observer."""
         fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=self.style.get_figure_size('3x1_tall'),
-                                             sharex=True, constrained_layout=True)
+                                             sharex=True, constrained_layout=self._get_layout_mode())
         
         lw = self.style.linewidth_primary
         alpha = self.style.alpha_primary
@@ -891,7 +1017,7 @@ class ResearchComparisonPlotter:
     def _plot_disturbance_torques(self) -> plt.Figure:
         """Figure 12: Environmental Disturbance Torques."""
         fig, axes = plt.subplots(2, 2, figsize=self.style.get_figure_size('double_column'),
-                                  constrained_layout=True)
+                                  constrained_layout=self._get_layout_mode())
         ax1, ax2 = axes[0]
         ax3, ax4 = axes[1]
         
@@ -994,7 +1120,7 @@ class ResearchComparisonPlotter:
         log = self._results_ndob['log_arrays']
         has_disturbance = 'tau_disturbance_az' in log and np.std(log['tau_disturbance_az']) > 1e-10
         
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10), constrained_layout=True)
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10), constrained_layout=self._get_layout_mode())
         
         if has_disturbance:
             t = log['time']
@@ -1086,36 +1212,55 @@ class ResearchComparisonPlotter:
         return fig
     
     def _save_all_figures(self) -> None:
-        """Save all generated figures to disk."""
-        print("\n[OK] Generated 13 research-quality figures (300 DPI, LaTeX labels)")
-        print("Saving figures to disk...")
+        """Save all generated figures to disk in journal-quality PDF format."""
+        mode_str = "interactive" if self.interactive else "static"
+        print(f"\n[OK] Generated 13 research-quality {mode_str} figures (300 DPI, LaTeX labels)")
+        print("Saving figures to disk in journal-quality PDF format...")
         
         figure_names = {
-            'fig1_position': 'fig1_position_tracking.png',
-            'fig2_error': 'fig2_tracking_error_handover.png',
-            'fig3_torque': 'fig3_torque_ndob.png',
-            'fig4_velocity': 'fig4_velocities.png',
-            'fig5_phase': 'fig5_phase_plane.png',
-            'fig6_los': 'fig6_los_errors.png',
-            'fig7_summary': 'fig7_performance_summary.png',
-            'fig8_ekf': 'fig8_state_estimates.png',
-            'fig9_fsm': 'fig9_fsm_performance.png',
-            'fig10_internal': 'fig10_internal_signals.png',
-            'fig11_ekf_diag': 'fig11_ekf_adaptive_tuning.png',
-            'fig12_disturbance': 'fig12_environmental_disturbances.png',
-            'fig13_statistics': 'fig13_disturbance_statistics.png',
+            'fig1_position': 'fig1_position_tracking.pdf',
+            'fig2_error': 'fig2_tracking_error_handover.pdf',
+            'fig3_torque': 'fig3_torque_ndob.pdf',
+            'fig4_velocity': 'fig4_velocities.pdf',
+            'fig5_phase': 'fig5_phase_plane.pdf',
+            'fig6_los': 'fig6_los_errors.pdf',
+            'fig7_summary': 'fig7_performance_summary.pdf',
+            'fig8_ekf': 'fig8_state_estimates.pdf',
+            'fig9_fsm': 'fig9_fsm_performance.pdf',
+            'fig10_internal': 'fig10_internal_signals.pdf',
+            'fig11_ekf_diag': 'fig11_ekf_adaptive_tuning.pdf',
+            'fig12_disturbance': 'fig12_environmental_disturbances.pdf',
+            'fig13_statistics': 'fig13_disturbance_statistics.pdf',
         }
         
         for key, filename in figure_names.items():
             if key in self.figures:
-                self.figures[key].savefig(
-                    self.style.output_dir / filename,
-                    dpi=self.style.dpi,
-                    bbox_inches='tight'
-                )
+                filepath = self.style.output_dir / filename
+                try:
+                    # Journal-quality PDF save parameters
+                    self.figures[key].savefig(
+                        str(filepath),  # Convert Path to string for Windows compatibility
+                        format='pdf',
+                        dpi=300,  # Journal standard resolution
+                        bbox_inches='tight',
+                        facecolor='white',
+                        edgecolor='none',
+                        metadata={
+                            'Title': filename.replace('.pdf', '').replace('_', ' ').title(),
+                            'Author': 'MicroPrecisionGimbal Digital Twin',
+                            'Subject': 'Aerospace Gimbal Control Research',
+                            'Creator': 'matplotlib + ResearchComparisonPlotter',
+                        }
+                    )
+                    # Ensure file is written and closed properly
+                    if hasattr(self.figures[key].canvas, 'flush_events'):
+                        self.figures[key].canvas.flush_events()
+                    time.sleep(0.01)  # Brief pause for file system sync
+                except Exception as e:
+                    print(f"  [ERROR] Failed to save {filename}: {e}")
         
-        print(f"  [OK] Saved 13 figures to {self.style.output_dir.absolute()}/")
-        print("  [OK] Format: PNG, 300 DPI, bbox='tight' (publication-ready)")
+        print(f"  [OK] Saved 13 PDF figures to {self.style.output_dir.absolute()}/")
+        print("  [OK] Format: PDF (vector), 300 DPI, bbox='tight' (journal-ready)")
         print("FIGURE GENERATION COMPLETE")
         print("=" * 70)
 
