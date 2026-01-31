@@ -54,6 +54,13 @@ from lasercom_digital_twin.core.plots.research_comparison_plotter import (
     ResearchComparisonPlotter
 )
 
+from lasercom_digital_twin.core.plots.interactive_plotter import (
+    InteractiveFigureManager,
+    InteractiveStyleConfig,
+    InteractionMode,
+    make_interactive
+)
+
 __all__ = [
     # Style Configuration
     'PlotStyleConfig',
@@ -67,6 +74,12 @@ __all__ = [
     
     # Plotters
     'ResearchComparisonPlotter',
+    
+    # Interactive Plotting
+    'InteractiveFigureManager',
+    'InteractiveStyleConfig',
+    'InteractionMode',
+    'make_interactive',
 ]
 
 __version__ = '2.0.0'
