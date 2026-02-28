@@ -1,0 +1,32 @@
+{
+    "controller_type": "PIDF_Decentralized",
+    "description": "FSM PIDF controller gains for DigitalTwinRunner integration",
+    "design_bandwidth_hz": 150.0,
+    "phase_margin_deg": 107.2137479311117,
+    "pi_controller": {
+        "Kp_tip": 0.9759550548393205,
+        "Ki_tip": 91.98159691551099,
+        "Kp_tilt": 0.9528816348715392,
+        "Ki_tilt": 89.80697831559176,
+        "crossover_freq_hz": 150.0,
+        "phase_margin_deg": 80.64869675403371
+    },
+    "pidf_controller": {
+        "Kp_tip": 0.9759550548393205,
+        "Ki_tip": 91.98159691551099,
+        "Kd_tip": 0.0005177602373773322,
+        "Kp_tilt": 0.9528816348715392,
+        "Ki_tilt": 89.80697831559176,
+        "Kd_tilt": 0.0005055194079043067,
+        "N_tip": 15.0,
+        "N_tilt": 15.0,
+        "crossover_freq_hz": 150.0,
+        "phase_margin_deg": 107.2137479311117
+    },
+    "usage_notes": [
+        "Use PI controller for baseline performance",
+        "Use PIDF controller for high-bandwidth operation",
+        "Derivative filter N prevents QPD noise amplification",
+        "Gains tuned for 150 Hz bandwidth with 45\u00b0 phase margin"
+    ]
+}
