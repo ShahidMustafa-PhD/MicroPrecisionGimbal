@@ -260,7 +260,7 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
                   color=color_cmd, linewidth=2, linestyle='--', label='Command', alpha=0.7)
     
     ax1a.set_ylabel('Azimuth Angle [deg]', fontsize=14, fontweight='bold')
-    ax1a.set_title('Gimbal Azimuth Position', fontsize=14, fontweight='bold')
+    #ax1a.set_title('Gimbal Azimuth Position', fontsize=14, fontweight='bold')
     ax1a.legend(loc='best', fontsize=14)
     ax1a.grid(True, alpha=0.3, linestyle=':')
     
@@ -280,11 +280,11 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
                   color=color_cmd, linewidth=2, linestyle='--', label='Command', alpha=0.7)
     ax1b.set_ylabel('Elevation Angle [deg]', fontsize=14, fontweight='bold')
     ax1b.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
-    ax1b.set_title('Gimbal Elevation Position', fontsize=14, fontweight='bold')
+   # ax1b.set_title('Gimbal Elevation Position', fontsize=14, fontweight='bold')
     ax1b.legend(loc='best', fontsize=14)
     ax1b.grid(True, alpha=0.3, linestyle=':')
     
-    fig1.suptitle('Gimbal Position Tracking', fontsize=14, fontweight='bold')
+    #fig1.suptitle('Gimbal Position Tracking', fontsize=14, fontweight='bold')
     
     # =============================================================================
     # FIGURE 2: Tracking Error with Handover Thresholds (THE MONEY SHOT)
@@ -308,12 +308,12 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
 
     # Critical handover thresholds (FSM engagement at 0.8°)
     ax2a.axhline(0.8, color='orange', linewidth=2, linestyle=':', 
-                 alpha=0.6, label='FSM Handover (0.8°)')
+                 alpha=0.6, label='FSM Handover (2.0°)')
     ax2a.axhline(1.0, color=COLOR_THRESHOLD, linewidth=2, linestyle=':', 
-                 alpha=0.5, label='Performance Limit (1.0°)')
+                 alpha=0.5, label='Performance Limit (2.0°)')
     
     ax2a.set_ylabel('Azimuth Error [deg]', fontsize=14, fontweight='bold')
-    ax2a.set_title('Azimuth Tracking Error (with FSM Handover Threshold)', fontsize=14, fontweight='bold')
+   # ax2a.set_title('Azimuth Tracking Error (with FSM Handover Threshold)', fontsize=14, fontweight='bold')
     ax2a.legend(loc='best', fontsize=14)
     ax2a.grid(True, alpha=0.3, linestyle=':')
     ax2a.set_yscale('log')
@@ -333,18 +333,18 @@ def plot_research_comparison(results_pid: Dict, results_fbl: Dict, results_ndob:
     ax2b.plot(t_ndob, np.rad2deg(error_el_ndob), color=COLOR_NDOB, linewidth=2, label='FBL+NDOB', alpha=0.9)
 
     ax2b.axhline(0.8, color='orange', linewidth=2, linestyle=':', 
-                 alpha=0.6, label='FSM Handover (0.8°)')
+                 alpha=0.6, label='FSM Handover (2.0°)')
     ax2b.axhline(1.0, color=COLOR_THRESHOLD, linewidth=2, linestyle=':', 
-                 alpha=0.5, label='Performance Limit (1.0°)')
+                 alpha=0.5, label='Performance Limit (2.0°)')
     
     ax2b.set_ylabel('Elevation Error [deg]', fontsize=14, fontweight='bold')
     ax2b.set_xlabel('Time [s]', fontsize=14, fontweight='bold')
-    ax2b.set_title('Elevation Tracking Error (with FSM Handover Threshold)', fontsize=14, fontweight='bold')
+    #ax2b.set_title('Elevation Tracking Error (with FSM Handover Threshold)', fontsize=14, fontweight='bold')
     ax2b.legend(loc='best', fontsize=14)
     ax2b.grid(True, alpha=0.3, linestyle=':')
     ax2b.set_yscale('log')
     
-    fig2.suptitle('Tracking Error with Precision Thresholds', fontsize=14, fontweight='bold')
+    #fig2.suptitle('Tracking Error with Precision Thresholds', fontsize=14, fontweight='bold')
     
     # =============================================================================
     # FIGURE 3: Control Torques & NDOB Disturbance Estimation
@@ -1703,7 +1703,7 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     # Signal characteristics
     target_amplitude = 90.0 # degrees
     target_period = 20   # seconds
-    target_reachangle = 90.0  # degrees - for hybridsig only
+    target_reachangle = 1  # degrees - for hybridsig only
     
     # =============================================================================
     # Environmental Disturbance Configuration
@@ -1713,8 +1713,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     env_disturbance_cfg = {
         'seed': 42,
         'wind': {
-            'enabled': False,
-            'start_time': 3.0,
+            'enabled': True,
+            'start_time': 5.0,
             'mean_velocity': 5.0,
             'turbulence_intensity': 0.15,
             'scale_length': 200.0,
@@ -1723,15 +1723,15 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
             'gimbal_arm': 0.15,
         },
         'vibration': {
-            'enabled': True,
-            'start_time': 3.0,
+            'enabled':False,
+            'start_time': 2.0,
             'modal_frequencies': [15.0, 45.0, 80.0],
             'modal_dampings': [0.02, 0.015, 0.01],
             'modal_amplitudes': [1e-3, 5e-4, 2e-4],
             'inertia_coupling': 0.1,
         },
         'structural_noise': {
-            'enabled': False,
+            'enabled': True,
             'std': 0.005,
             'freq_low': 100.0,
             'freq_high': 500.0,
@@ -1787,10 +1787,10 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     print("-" * 80)
     
     config_pid = SimulationConfig(
-        dt_sim=0.001,
+        dt_sim=0.0001,
         dt_coarse=0.01,
-        dt_fine=0.001,
-        log_period=0.001,
+        dt_fine=0.0001,
+        log_period=0.0001,
         seed=42,
         target_az=np.deg2rad(target_az_deg),
         target_el=np.deg2rad(target_el_deg),
@@ -1836,10 +1836,10 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     print("-" * 80)
     
     config_fl = SimulationConfig(
-        dt_sim=0.001,
+        dt_sim=0.0001,
         dt_coarse=0.01,
-        dt_fine=0.001,
-        log_period=0.001,
+        dt_fine=0.0001,
+        log_period=0.0001,
         seed=42,
         target_az=np.deg2rad(target_az_deg),
         target_el=np.deg2rad(target_el_deg),
@@ -2081,12 +2081,12 @@ if __name__ == '__main__':
             'start_time': 5.0             # Delay onset [s]
         },
         'vibration': {
-            'enabled': True,
+            'enabled': False,
             'modal_frequencies': [15.0, 45.0, 80.0],  # Structural modes [Hz]
             'modal_dampings': [0.02, 0.015, 0.01],    # Low damping typical
             'modal_amplitudes': [1e-3, 5e-4, 2e-4],   # PSD amplitudes [(m/s²)²/Hz]
             'inertia_coupling': 0.1,                  # Accel→torque [N·m/(m/s²)]
-            'start_time': 7.0
+            'start_time': 3.5
         },
         'structural_noise': {
             'enabled': True,
