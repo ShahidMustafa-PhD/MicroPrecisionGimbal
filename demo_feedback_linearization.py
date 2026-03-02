@@ -1698,7 +1698,7 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     # Common test parameters
     target_az_deg = 0
     target_el_deg = 0
-    duration = 10 # Increased to show full wave periods
+    duration = 2 # Increased to show full wave periods
     
     # Signal characteristics
     target_amplitude = 90.0 # degrees
@@ -2078,7 +2078,7 @@ if __name__ == '__main__':
             'turbulence_intensity': 0.15, # σ_u/V_mean ratio (0.1=light, 0.2=moderate)
             'mean_velocity': 8.0,         # Mean wind speed V_mean [m/s]
             'direction_deg': 45.0,        # Wind direction (affects both axes)
-            'start_time': 5.0             # Delay onset [s]
+            'start_time': 1.0             # Delay onset [s]
         },
         'vibration': {
             'enabled': False,
@@ -2086,7 +2086,7 @@ if __name__ == '__main__':
             'modal_dampings': [0.02, 0.015, 0.01],    # Low damping typical
             'modal_amplitudes': [1e-3, 5e-4, 2e-4],   # PSD amplitudes [(m/s²)²/Hz]
             'inertia_coupling': 0.1,                  # Accel→torque [N·m/(m/s²)]
-            'start_time': 3.5
+            'start_time': 0.5
         },
         'structural_noise': {
             'enabled': True,
