@@ -480,8 +480,8 @@ Examples:
     
     parser.add_argument('--f_min', type=float, default=0.1,
                        help='Minimum frequency [Hz] (default: 0.1)')
-    parser.add_argument('--f_max', type=float, default=50.0,
-                       help='Maximum frequency [Hz] (default: 50)')
+    parser.add_argument('--f_max', type=float, default=25.0,
+                       help='Maximum frequency [Hz] (default: 25)')
     parser.add_argument('--n_points', type=int, default=30,
                        help='Number of frequency points (default: 30)')
     parser.add_argument('--amplitude', type=float, default=1.0,
