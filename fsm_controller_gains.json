@@ -1,27 +1,33 @@
 {
     "controller_type": "PIDF_Decentralized",
     "description": "FSM PIDF controller gains for DigitalTwinRunner integration",
-    "design_bandwidth_hz": 300.0,
-    "phase_margin_deg": 290.0989530888155,
+    "design_bandwidth_hz": 150.0,
+    "phase_margin_deg": 45.500373135082,
     "pi_controller": {
-        "Kp_tip": 9100.79117439797,
-        "Ki_tip": 1715458.721720609,
-        "Kp_tilt": 9100.79117439797,
-        "Ki_tilt": 1715458.721720609,
-        "crossover_freq_hz": 300.0,
-        "phase_margin_deg": 263.53390191173753
+        "Kp_tip": 9775.184141488076,
+        "Ki_tip": 921289.4005915916,
+        "Kp_tilt": 9775.184141488076,
+        "Ki_tilt": 921289.4005915916,
+        "crossover_freq_hz": 150.0,
+        "phase_margin_deg": 263.93772362998584
     },
     "pidf_controller": {
-        "Kp_tip": 9100.79117439797,
-        "Ki_tip": 1715458.721720609,
-        "Kd_tip": 2.4140598357542205,
-        "Kp_tilt": 9100.79117439797,
-        "Ki_tilt": 1715458.721720609,
-        "Kd_tilt": 2.4140598357542205,
+        "Kp_tip": 9793.535375291745,
+        "Ki_tip": 1153773.7045383113,
+        "Kd_tip": 5.195631884410072,
+        "Kp_tilt": 9793.535375291745,
+        "Ki_tilt": 1153773.7045383113,
+        "Kd_tilt": 5.195631884410072,
         "N_tip": 15.0,
         "N_tilt": 15.0,
-        "crossover_freq_hz": 300.0,
-        "phase_margin_deg": 290.0989530888155
+        "notch": {
+            "f_center_hz": 1000.0,
+            "zeta_zero": 0.005,
+            "zeta_pole": 0.4
+        },
+        "crossover_freq_hz": 150.0,
+        "phase_margin_deg": 45.500373135082,
+        "gain_margin_db": 244.955354613904
     },
     "usage_notes": [
         "Use PI controller for baseline performance",
