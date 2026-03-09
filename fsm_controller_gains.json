@@ -2,7 +2,7 @@
     "controller_type": "PIDF_Decentralized",
     "description": "FSM PIDF controller gains for DigitalTwinRunner integration",
     "design_bandwidth_hz": 150.0,
-    "phase_margin_deg": 45.500373135082,
+    "phase_margin_deg": 92.03187507157574,
     "pi_controller": {
         "Kp_tip": 9775.184141488076,
         "Ki_tip": 921289.4005915916,
@@ -12,22 +12,22 @@
         "phase_margin_deg": 263.93772362998584
     },
     "pidf_controller": {
-        "Kp_tip": 9793.535375291745,
-        "Ki_tip": 1153773.7045383113,
-        "Kd_tip": 5.195631884410072,
-        "Kp_tilt": 9793.535375291745,
-        "Ki_tilt": 1153773.7045383113,
-        "Kd_tilt": 5.195631884410072,
-        "N_tip": 15.0,
-        "N_tilt": 15.0,
+        "Kp_tip": 979.3535375291746,
+        "Ki_tip": 9230189.63630649,
+        "Kd_tip": 0.0,
+        "Kp_tilt": 979.3535375291746,
+        "Ki_tilt": 9230189.63630649,
+        "Kd_tilt": 0.0,
+        "N_tip": 10.0,
+        "N_tilt": 10.0,
         "notch": {
             "f_center_hz": 1000.0,
             "zeta_zero": 0.005,
-            "zeta_pole": 0.4
+            "zeta_pole": 0.707
         },
         "crossover_freq_hz": 150.0,
-        "phase_margin_deg": 45.500373135082,
-        "gain_margin_db": 244.955354613904
+        "phase_margin_deg": 92.03187507157574,
+        "gain_margin_db": 12.22956810424369
     },
     "usage_notes": [
         "Use PI controller for baseline performance",

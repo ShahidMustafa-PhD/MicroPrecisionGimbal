@@ -814,10 +814,11 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     print("-" * 80)
     
     config_pid = SimulationConfig(
-        dt_sim=0.0001,
+        dt_sim=0.001,
         dt_coarse=0.01,
         dt_fine=0.0001,
-        log_period=0.0001,
+        dt_qpd=0.0001,
+        log_period=0.001,
         seed=42,
         target_az=np.deg2rad(target_az_deg),
         target_el=np.deg2rad(target_el_deg),
@@ -864,10 +865,11 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     print("-" * 80)
     
     config_fl = SimulationConfig(
-        dt_sim=0.0001,
+        dt_sim=0.00001,
         dt_coarse=0.01,
-        dt_fine=0.0001,
-        log_period=0.0001,
+        dt_fine=0.00001,
+        dt_qpd=0.00001,
+        log_period=0.001,
         seed=42,
         target_az=np.deg2rad(target_az_deg),
         target_el=np.deg2rad(target_el_deg),
@@ -894,10 +896,10 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
             # Design for ωn = 20 rad/s (3.2 Hz), ζ = 1.0 (critically damped)
             # Kp = ωn² = 400, Kd = 2*ζ*ωn = 40
             # With friction feedforward for best baseline performance
-            'kp': [400.0, 400.0],    # Position gain [1/s²]
+            'kp': [400.0, 600.0],    # Position gain [1/s²]
             'kd': [40.0, 40.0],      # Velocity gain [1/s] - critically damped
-            'ki': [50.0, 50.0],      # Integral for residual disturbances
-            'enable_integral': False,  # ENABLE for steady-state performance
+            'ki': [50.0, 25.0],      # Integral for residual disturbances
+            'enable_integral': True,  # ENABLE for steady-state performance
             'tau_max': [10.0, 10.0],
             'tau_min': [-10.0, -10.0],
             # Friction feedforward - ENABLE for fair comparison
@@ -978,7 +980,7 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
         # combined with friction feedforward (conditional_friction=True) for
         # optimal performance.
         'lambda_az': 70.0,   # Moderate bandwidth (avoids instability at >200)
-        'lambda_el': 50.0,   # Same for both axes
+        'lambda_el': 100.0,   # Same for both axes
         'd_max': 0.5         # Allow reasonable estimates
     }
     # KEEP friction feedforward ENABLED with NDOB!
@@ -1080,7 +1082,7 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     
     plotter = ResearchComparisonPlotter(
         save_figures=True,
-        show_figures=False,
+        show_figures=True,
         interactive=False  # Disabled for automated data collection
     )
     plotter.plot_all(results_pid, results_fbl, results_ndob, target_az_deg, target_el_deg)
@@ -1118,7 +1120,7 @@ if __name__ == '__main__':
             'start_time': 0.5
         },
         'structural_noise': {
-            'enabled': True,
+            'enabled': False,
             'std': 0.01,        # Noise intensity σ [N·m]
             'freq_low': 100.0,   # Lower cutoff [Hz]
             'freq_high': 500.0   # Upper cutoff [Hz]
