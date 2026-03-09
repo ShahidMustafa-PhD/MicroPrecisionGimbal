@@ -325,8 +325,9 @@ class TestFSMActuatorModel:
         fsm = FSMActuatorModel(fsm_config)
         
         # Run FSM to build up state
+        # Use dt=0.0001 for Euler stability at ωn=2000 rad/s (fn≈318 Hz)
         for _ in range(100):
-            fsm.step(np.deg2rad(0.5), np.deg2rad(0.3), 0.001)
+            fsm.step(np.deg2rad(0.5), np.deg2rad(0.3), 0.0001)
         
         assert fsm.alpha != 0.0, "Alpha should be non-zero before reset"
         assert fsm.beta != 0.0, "Beta should be non-zero before reset"

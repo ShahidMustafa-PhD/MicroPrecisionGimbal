@@ -1,5 +1,5 @@
 # Requirements file would typically be created with actual dependencies
-# This is a placeholder showing the expected structure
+
 
 # Core Scientific Computing
 numpy>=1.24.0

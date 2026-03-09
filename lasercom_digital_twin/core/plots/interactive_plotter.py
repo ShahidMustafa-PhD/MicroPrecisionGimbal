@@ -936,15 +936,16 @@ class InteractiveFigureManager:
         # Add label at top
         ylim = ax.get_ylim()
         label = ax.text(
-            x, ylim[1],
-            f't = {x:.3f}',
-            fontsize=self.style.label_fontsize,
+            x, ylim[0] + 0.5 * (ylim[1] - ylim[0]),
+            #f't = {x:.3f}',
+            f'Wind Gust',
+            fontsize=14, #self.style.label_fontsize,
             ha='center',
             va='bottom',
             color=self.style.vline_color,
             fontweight='bold',
-            bbox=dict(boxstyle='round,pad=0.2', facecolor='white', alpha=0.9,
-                     edgecolor=self.style.vline_color, linewidth=1),
+            bbox=dict(boxstyle='round,pad=0.2', facecolor='none', alpha=0.9,
+                     edgecolor=self.style.vline_color, linewidth=0),
             zorder=101
         )
         

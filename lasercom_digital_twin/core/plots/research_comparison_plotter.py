@@ -310,8 +310,8 @@ class ResearchComparisonPlotter:
         
         ax1.set_ylabel('Azimuth Angle [deg]', fontsize=self.style.axis_label_fontsize,
                        fontweight='bold')
-        ax1.set_title('Gimbal Azimuth Position', fontsize=self.style.title_fontsize,
-                      fontweight='bold')
+        #ax1.set_title('Gimbal Azimuth Position', fontsize=self.style.title_fontsize,
+        #              fontweight='bold')
         ax1.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax1.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -335,13 +335,13 @@ class ResearchComparisonPlotter:
         ax2.set_ylabel('Elevation Angle [deg]', fontsize=self.style.axis_label_fontsize,
                        fontweight='bold')
         ax2.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax2.set_title('Gimbal Elevation Position', fontsize=self.style.title_fontsize,
-                      fontweight='bold')
+        #ax2.set_title('Gimbal Elevation Position', fontsize=self.style.title_fontsize,
+        #              fontweight='bold')
         ax2.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
-        fig.suptitle('Gimbal Position Tracking', fontsize=self.style.suptitle_fontsize,
-                     fontweight='bold')
+       # fig.suptitle('Gimbal Position Tracking', fontsize=self.style.suptitle_fontsize,
+                 #    fontweight='bold')
         
         return fig
     
@@ -374,16 +374,22 @@ class ResearchComparisonPlotter:
         ax1.plot(self._t_ndob, np.rad2deg(error_az_ndob),
                  color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB', alpha=alpha)
         
-        # Threshold lines
-        ax1.axhline(1, color=ControllerColors.HANDOVER, linewidth=lw, linestyle='-',
-                    alpha=self.style.alpha_threshold, label='FSM Handover (1.0°)')
-        #ax1.axhline(1.0, color=ControllerColors.THRESHOLD, linewidth=lw, linestyle='-',
-                    #alpha=0.5, label='Performance Limit (1.0°)')
+        # Threshold lines and shaded regions
+        limit_rad_az = np.array(self._results_ndob['log_arrays'].get('fsm_stroke_limit_rad', np.full(len(self._t_ndob), 0.010)))
+        limit_deg_az = np.rad2deg(limit_rad_az)
+        
+        ax1.plot(self._t_ndob, limit_deg_az, color=ControllerColors.HANDOVER, linewidth=lw*1.5, linestyle='--',
+                 label='FSM Stroke / QPD Limit')
+        
+        ylim1 = ax1.get_ylim()
+        ax1.fill_between(self._t_ndob, 1e-10, limit_deg_az, color='lightgreen', alpha=0.15, label='LOS Acquired (QPD Active)')
+        ax1.fill_between(self._t_ndob, limit_deg_az, max(180.0, ylim1[1]), color='lightcoral', alpha=0.15, label='Connection Lost (Out of Reach)')
+        ax1.set_ylim(bottom=max(1e-4, ylim1[0]), top=max(limit_deg_az[0]*2, ylim1[1]))
         
         ax1.set_ylabel('Azimuth Error [deg]', fontsize=self.style.axis_label_fontsize,
                        fontweight='bold')
-        ax1.set_title('Azimuth Tracking Error (with FSM Handover Threshold)',
-                      fontsize=self.style.title_fontsize, fontweight='bold')
+       # ax1.set_title('Azimuth Tracking Error (with FSM Handover Threshold)',
+                      #fontsize=self.style.title_fontsize, fontweight='bold')
         ax1.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax1.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         ax1.set_yscale('log')
@@ -408,22 +414,29 @@ class ResearchComparisonPlotter:
         ax2.plot(self._t_ndob, np.rad2deg(error_el_ndob),
                  color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB', alpha=alpha)
         
-        ax2.axhline(1, color=ControllerColors.HANDOVER, linewidth=lw, linestyle='-',
-                    alpha=self.style.alpha_threshold, label='FSM Handover (1.0°)')
-       # ax2.axhline(1.0, color=ControllerColors.THRESHOLD, linewidth=lw, linestyle='-',
-                    #alpha=0.5, label='Performance Limit (1.0°)')
+        # Threshold lines and shaded regions
+        limit_rad_el = np.array(self._results_ndob['log_arrays'].get('fsm_stroke_limit_rad', np.full(len(self._t_ndob), 0.010)))
+        limit_deg_el = np.rad2deg(limit_rad_el)
+        
+        ax2.plot(self._t_ndob, limit_deg_el, color=ControllerColors.HANDOVER, linewidth=lw*1.5, linestyle='--',
+                 label='FSM Stroke / QPD Limit')
+        
+        ylim2 = ax2.get_ylim()
+        ax2.fill_between(self._t_ndob, 1e-10, limit_deg_el, color='lightgreen', alpha=0.15, label='LOS Acquired (QPD Active)')
+        ax2.fill_between(self._t_ndob, limit_deg_el, max(180.0, ylim2[1]), color='lightcoral', alpha=0.15, label='Connection Lost (Out of Reach)')
+        ax2.set_ylim(bottom=max(1e-4, ylim2[0]), top=max(limit_deg_el[0]*2, ylim2[1]))
         
         ax2.set_ylabel('Elevation Error [deg]', fontsize=self.style.axis_label_fontsize,
                        fontweight='bold')
         ax2.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax2.set_title('Elevation Tracking Error (with FSM Handover Threshold)',
-                      fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax2.set_title('Elevation Tracking Error (with FSM Handover Threshold)',
+                     # fontsize=self.style.title_fontsize, fontweight='bold')
         ax2.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         ax2.set_yscale('log')
         
-        fig.suptitle('Tracking Error with Precision Thresholds',
-                     fontsize=self.style.suptitle_fontsize, fontweight='bold')
+        ##fig.suptitle('Tracking Error with Precision Thresholds',
+                     #fontsize=self.style.suptitle_fontsize, fontweight='bold')
         
         return fig
     
@@ -451,7 +464,7 @@ class ResearchComparisonPlotter:
         ax1.axhline(tau_min, color='red', linewidth=lw, linestyle=':', alpha=self.style.alpha_threshold)
         ax1.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
         ax1.set_ylabel('Azimuth Torque [N·m]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax1.set_title('Azimuth Motor Control Effort', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax1.set_title('Azimuth Motor Control Effort', fontsize=self.style.title_fontsize, fontweight='bold')
         ax1.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax1.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -467,7 +480,7 @@ class ResearchComparisonPlotter:
         ax2.axhline(tau_min, color='red', linewidth=lw, linestyle=':', alpha=self.style.alpha_threshold)
         ax2.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
         ax2.set_ylabel('Elevation Torque [N·m]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax2.set_title('Elevation Motor Control Effort', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax2.set_title('Elevation Motor Control Effort', fontsize=self.style.title_fontsize, fontweight='bold')
         ax2.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -485,8 +498,8 @@ class ResearchComparisonPlotter:
             ax3.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
             ax3.set_ylabel('Disturbance [N·m]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
             ax3.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-            ax3.set_title('Azimuth Disturbance Estimation Accuracy',
-                          fontsize=self.style.title_fontsize, fontweight='bold')
+            #ax3.set_title('Azimuth Disturbance Estimation Accuracy',
+            #              fontsize=self.style.title_fontsize, fontweight='bold')
             ax3.legend(loc='best', fontsize=self.style.legend_fontsize)
         else:
             ax3.text(0.5, 0.5, 'NDOB Not Enabled', ha='center', va='center',
@@ -506,15 +519,15 @@ class ResearchComparisonPlotter:
             ax4.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
             ax4.set_ylabel('Disturbance [N·m]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
             ax4.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-            ax4.set_title('Elevation Disturbance Estimation Accuracy',
-                          fontsize=self.style.title_fontsize, fontweight='bold')
+            #ax4.set_title('Elevation Disturbance Estimation Accuracy',
+            #              fontsize=self.style.title_fontsize, fontweight='bold')
             ax4.legend(loc='best', fontsize=self.style.legend_fontsize)
         else:
             ax4.text(0.5, 0.5, 'NDOB Not Enabled', ha='center', va='center',
                      transform=ax4.transAxes, fontsize=self.style.axis_label_fontsize)
         ax4.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
-        fig.suptitle('Motor Control Torques', fontsize=self.style.suptitle_fontsize, fontweight='bold')
+        #fig.suptitle('Motor Control Torques', fontsize=self.style.suptitle_fontsize, fontweight='bold')
         
         return fig
     
@@ -535,7 +548,7 @@ class ResearchComparisonPlotter:
                  color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB', alpha=alpha)
         ax1.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
         ax1.set_ylabel('Azimuth Rate [deg/s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax1.set_title('Gimbal Azimuth Velocity', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax1.set_title('Gimbal Azimuth Velocity', fontsize=self.style.title_fontsize, fontweight='bold')
         ax1.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax1.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -549,11 +562,11 @@ class ResearchComparisonPlotter:
         ax2.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
         ax2.set_ylabel('Elevation Rate [deg/s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
         ax2.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax2.set_title('Gimbal Elevation Velocity', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax2.set_title('Gimbal Elevation Velocity', fontsize=self.style.title_fontsize, fontweight='bold')
         ax2.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
-        fig.suptitle('Gimbal Angular Velocities', fontsize=self.style.suptitle_fontsize, fontweight='bold')
+        #fig.suptitle('Gimbal Angular Velocities', fontsize=self.style.suptitle_fontsize, fontweight='bold')
         
         return fig
     
@@ -576,7 +589,7 @@ class ResearchComparisonPlotter:
                  color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB', alpha=0.7)
         ax1.set_xlabel('Az Angle [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
         ax1.set_ylabel('Az Rate [deg/s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax1.set_title('Az Phase Plane', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax1.set_title('Az Phase Plane', fontsize=self.style.title_fontsize, fontweight='bold')
         ax1.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax1.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -592,11 +605,11 @@ class ResearchComparisonPlotter:
                  color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB', alpha=0.7)
         ax2.set_xlabel('El Angle [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
         ax2.set_ylabel('El Rate [deg/s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax2.set_title('El Phase Plane', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax2.set_title('El Phase Plane', fontsize=self.style.title_fontsize, fontweight='bold')
         ax2.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
-        fig.suptitle('Gimbal Phase Plane', fontsize=self.style.suptitle_fontsize, fontweight='bold')
+       # fig.suptitle('Gimbal Phase Plane', fontsize=self.style.suptitle_fontsize, fontweight='bold')
         
         return fig
     
@@ -617,7 +630,7 @@ class ResearchComparisonPlotter:
                  color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB', alpha=alpha)
         ax1.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
         ax1.set_ylabel('LOS Error X [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax1.set_title('Line-of-Sight Error X-Axis', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax1.set_title('Line-of-Sight Error X-Axis', fontsize=self.style.title_fontsize, fontweight='bold')
         ax1.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax1.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -630,7 +643,7 @@ class ResearchComparisonPlotter:
                  color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB', alpha=alpha)
         ax2.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
         ax2.set_ylabel('LOS Error Y [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax2.set_title('Line-of-Sight Error Y-Axis', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax2.set_title('Line-of-Sight Error Y-Axis', fontsize=self.style.title_fontsize, fontweight='bold')
         ax2.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -648,7 +661,7 @@ class ResearchComparisonPlotter:
         ax3.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
         ax3.set_ylabel('Total LOS Error [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
         ax3.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax3.set_title('Total Line-of-Sight Error Magnitude', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax3.set_title('Total Line-of-Sight Error Magnitude', fontsize=self.style.title_fontsize, fontweight='bold')
         ax3.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax3.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -682,7 +695,7 @@ class ResearchComparisonPlotter:
         ax1.bar(x - width/2, settling_az, width, label='Azimuth', color=AxisColors.AZIMUTH, alpha=0.7)
         ax1.bar(x + width/2, settling_el, width, label='Elevation', color=AxisColors.ELEVATION, alpha=0.7)
         ax1.set_ylabel('Settling Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax1.set_title('Settling Time (2% Criterion)', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax1.set_title('Settling Time (2% Criterion)', fontsize=self.style.title_fontsize, fontweight='bold')
         ax1.set_xticks(x)
         ax1.set_xticklabels(controllers, fontsize=self.style.legend_fontsize)
         ax1.legend(loc='best', fontsize=self.style.legend_fontsize)
@@ -699,7 +712,7 @@ class ResearchComparisonPlotter:
         ax2.bar(x - width/2, sse_az, width, label='Azimuth', color=AxisColors.AZIMUTH, alpha=0.7)
         ax2.bar(x + width/2, sse_el, width, label='Elevation', color=AxisColors.ELEVATION, alpha=0.7)
         ax2.set_ylabel('Steady-State Error [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax2.set_title('Steady-State Error', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax2.set_title('Steady-State Error', fontsize=self.style.title_fontsize, fontweight='bold')
         ax2.set_xticks(x)
         ax2.set_xticklabels(controllers, fontsize=self.style.legend_fontsize)
         ax2.legend(loc='best', fontsize=self.style.legend_fontsize)
@@ -712,7 +725,7 @@ class ResearchComparisonPlotter:
                    np.rad2deg(self._results_ndob['los_error_rms'])]
         ax3.bar(x, los_rms, color=[ControllerColors.PID, ControllerColors.FBL, ControllerColors.FBL_NDOB], alpha=0.7)
         ax3.set_ylabel('LOS RMS Error [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax3.set_title('RMS Line-of-Sight Error', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax3.set_title('RMS Line-of-Sight Error', fontsize=self.style.title_fontsize, fontweight='bold')
         ax3.set_xticks(x)
         ax3.set_xticklabels(controllers, fontsize=self.style.legend_fontsize)
         ax3.grid(True, alpha=self.style.grid_alpha, axis='y', linestyle=self.style.grid_linestyle)
@@ -725,12 +738,12 @@ class ResearchComparisonPlotter:
         ]
         ax4.bar(x, np.array(torque_rms)*1e3, color=[ControllerColors.PID, ControllerColors.FBL, ControllerColors.FBL_NDOB], alpha=0.7)
         ax4.set_ylabel('Total Torque RMS [mN·m]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax4.set_title('Control Effort', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax4.set_title('Control Effort', fontsize=self.style.title_fontsize, fontweight='bold')
         ax4.set_xticks(x)
         ax4.set_xticklabels(controllers, fontsize=self.style.legend_fontsize)
         ax4.grid(True, alpha=self.style.grid_alpha, axis='y', linestyle=self.style.grid_linestyle)
         
-        fig.suptitle('Performance Metrics Summary', fontsize=self.style.suptitle_fontsize, fontweight='bold')
+       # fig.suptitle('Performance Metrics Summary', fontsize=self.style.suptitle_fontsize, fontweight='bold')
         
         return fig
     
@@ -757,7 +770,7 @@ class ResearchComparisonPlotter:
         ax1.plot(self._t_ndob, np.rad2deg(self._results_ndob['log_arrays']['q_az']),
                  color=ControllerColors.FBL_NDOB, linewidth=lw, linestyle='--', alpha=0.4, label='NDOB Truth')
         ax1.set_ylabel('Azimuth [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax1.set_title('Azimuth Position Estimate vs Truth', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax1.set_title('Azimuth Position Estimate vs Truth', fontsize=self.style.title_fontsize, fontweight='bold')
         ax1.legend(loc='best', fontsize=self.style.legend_fontsize, ncol=2)
         ax1.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -775,7 +788,7 @@ class ResearchComparisonPlotter:
         ax2.plot(self._t_ndob, np.rad2deg(self._results_ndob['log_arrays']['q_el']),
                  color=ControllerColors.FBL_NDOB, linewidth=lw, linestyle='--', alpha=0.4)
         ax2.set_ylabel('Elevation [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax2.set_title('Elevation Position Estimate vs Truth', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax2.set_title('Elevation Position Estimate vs Truth', fontsize=self.style.title_fontsize, fontweight='bold')
         ax2.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -794,7 +807,7 @@ class ResearchComparisonPlotter:
                  color=ControllerColors.FBL_NDOB, linewidth=lw, linestyle='--', alpha=0.4)
         ax3.set_ylabel('Az Rate [deg/s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
         ax3.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax3.set_title('Azimuth Rate Estimate vs Truth', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax3.set_title('Azimuth Rate Estimate vs Truth', fontsize=self.style.title_fontsize, fontweight='bold')
         ax3.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax3.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -813,69 +826,143 @@ class ResearchComparisonPlotter:
                  color=ControllerColors.FBL_NDOB, linewidth=lw, linestyle='--', alpha=0.4)
         ax4.set_ylabel('El Rate [deg/s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
         ax4.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax4.set_title('Elevation Rate Estimate vs Truth', fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax4.set_title('Elevation Rate Estimate vs Truth', fontsize=self.style.title_fontsize, fontweight='bold')
         ax4.legend(loc='best', fontsize=self.style.legend_fontsize)
         ax4.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
-        fig.suptitle('EKF Performance (Estimate vs Ground Truth)',
-                     fontsize=self.style.suptitle_fontsize, fontweight='bold')
+       # fig.suptitle('EKF Performance (Estimate vs Ground Truth)',
+       #              fontsize=self.style.suptitle_fontsize, fontweight='bold')
         
         return fig
     
     def _plot_fsm_performance(self) -> plt.Figure:
-        """Figure 9: Fine Steering Mirror Performance."""
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self.style.get_figure_size('2x1'),
-                                        sharex=True, constrained_layout=self._get_layout_mode())
+        """Figure 9: Fine Steering Mirror Performance.
         
-        lw = self.style.linewidth_primary
+        Three-panel layout:
+          Panel 1: FSM Tip mechanical angle [mdeg] + twin-axis command voltage [V]
+          Panel 2: FSM Tilt mechanical angle [mdeg] + twin-axis command voltage [V]
+          Panel 3: (Fix 4) Post-FSM residual LOS error in µrad — the definitive
+                   performance metric. Converging to zero proves correct operation;
+                   persistent oscillations reveal closed-loop instability.
+        """
+        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=self.style.get_figure_size('3x1'),
+                                             sharex=True, constrained_layout=self._get_layout_mode())
+        
+        lw = self.style.linewidth_primary * 1.5
         alpha = self.style.alpha_primary
         
-        # FSM Tip
-        ax1.plot(self._t_pid, np.rad2deg(self._results_pid['log_arrays']['fsm_tip']),
-                 color=ControllerColors.PID, linewidth=lw, label='PID Tip', alpha=alpha)
-        ax1.plot(self._t_fbl, np.rad2deg(self._results_fbl['log_arrays']['fsm_tip']),
-                 color=ControllerColors.FBL, linewidth=lw, label='FBL Tip', alpha=alpha)
-        ax1.plot(self._t_ndob, np.rad2deg(self._results_ndob['log_arrays']['fsm_tip']),
-                 color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB Tip', alpha=alpha)
-        # Commands
-        ax1.plot(self._t_pid, np.rad2deg(self._results_pid['log_arrays']['fsm_cmd_tip']),
-                 color=ControllerColors.PID, linewidth=lw, linestyle='--', alpha=0.5, label='PID Cmd')
-        ax1.plot(self._t_fbl, np.rad2deg(self._results_fbl['log_arrays']['fsm_cmd_tip']),
-                 color=ControllerColors.FBL, linewidth=lw, linestyle='--', alpha=0.5, label='FBL Cmd')
-        ax1.plot(self._t_ndob, np.rad2deg(self._results_ndob['log_arrays']['fsm_cmd_tip']),
-                 color=ControllerColors.FBL_NDOB, linewidth=lw, linestyle='--', alpha=0.5, label='NDOB Cmd')
-        ax1.set_ylabel('Tip [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax1.set_title('FSM Tip Axis Performance', fontsize=self.style.title_fontsize, fontweight='bold')
-        ax1.legend(loc='best', fontsize=self.style.legend_fontsize, ncol=2)
+        # ── Panel 1: FSM Tip ─────────────────────────────────────────────────
+        ax1.plot(self._t_pid, np.rad2deg(self._results_pid['log_arrays']['fsm_tip']) * 1000,
+                 color=ControllerColors.PID, linewidth=lw, label='PID Tip [mdeg]', alpha=alpha)
+        ax1.plot(self._t_fbl, np.rad2deg(self._results_fbl['log_arrays']['fsm_tip']) * 1000,
+                 color=ControllerColors.FBL, linewidth=lw, label='FBL Tip [mdeg]', alpha=alpha)
+        ax1.plot(self._t_ndob, np.rad2deg(self._results_ndob['log_arrays']['fsm_tip']) * 1000,
+                 color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB Tip [mdeg]', alpha=alpha)
+        
+        # Twin axis for command voltages (avoid rad2deg on Volts!)
+       # ax1_cmd = ax1.twinx()
+        #ax1_cmd.set_ylabel('Command [V]', fontsize=self.style.axis_label_fontsize, fontweight='bold', color='gray')
+        #ax1_cmd.plot(self._t_pid, np.array(self._results_pid['log_arrays']['fsm_cmd_tip']),
+              #   color=ControllerColors.PID, linewidth=2.0, linestyle='--', alpha=0.3)
+        #ax1_cmd.plot(self._t_fbl, np.array(self._results_fbl['log_arrays']['fsm_cmd_tip']),
+               #  color=ControllerColors.FBL, linewidth=2.0, linestyle='--', alpha=0.3)
+       # ax1_cmd.plot(self._t_ndob, np.array(self._results_ndob['log_arrays']['fsm_cmd_tip']),
+                # color=ControllerColors.FBL_NDOB, linewidth=2.0, linestyle='--', alpha=0.3)
+
+        # FSM Stroke Limit lines
+        limit_rad = np.array(self._results_ndob['log_arrays'].get('fsm_stroke_limit_rad', np.full(len(self._t_ndob), 0.010)))
+        limit_mdeg = np.rad2deg(limit_rad) * 1000.0
+        ax1.plot(self._t_ndob, limit_mdeg, color='red', linewidth=lw, linestyle='--', alpha=0.5, label='FSM Stroke / QPD Limit')
+        ax1.plot(self._t_ndob, -limit_mdeg, color='red', linewidth=lw, linestyle='--', alpha=0.5)
+
+        ax1.set_ylabel('Tip [mdeg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
+        ax1.legend(loc='upper left', fontsize=self.style.legend_fontsize, ncol=1)
         ax1.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
-        # FSM Tilt
-        ax2.plot(self._t_pid, np.rad2deg(self._results_pid['log_arrays']['fsm_tilt']),
-                 color=ControllerColors.PID, linewidth=lw, label='PID Tilt', alpha=alpha)
-        ax2.plot(self._t_fbl, np.rad2deg(self._results_fbl['log_arrays']['fsm_tilt']),
-                 color=ControllerColors.FBL, linewidth=lw, label='FBL Tilt', alpha=alpha)
-        ax2.plot(self._t_ndob, np.rad2deg(self._results_ndob['log_arrays']['fsm_tilt']),
-                 color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB Tilt', alpha=alpha)
-        ax2.plot(self._t_pid, np.rad2deg(self._results_pid['log_arrays']['fsm_cmd_tilt']),
-                 color=ControllerColors.PID, linewidth=lw, linestyle='--', alpha=0.5)
-        ax2.plot(self._t_fbl, np.rad2deg(self._results_fbl['log_arrays']['fsm_cmd_tilt']),
-                 color=ControllerColors.FBL, linewidth=lw, linestyle='--', alpha=0.5)
-        ax2.plot(self._t_ndob, np.rad2deg(self._results_ndob['log_arrays']['fsm_cmd_tilt']),
-                 color=ControllerColors.FBL_NDOB, linewidth=lw, linestyle='--', alpha=0.5)
-        ax2.set_ylabel('Tilt [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax2.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax2.set_title('FSM Tilt Axis Performance', fontsize=self.style.title_fontsize, fontweight='bold')
-        ax2.legend(loc='best', fontsize=self.style.legend_fontsize)
+        # ── Panel 2: FSM Tilt ────────────────────────────────────────────────
+        ax2.plot(self._t_pid, np.rad2deg(self._results_pid['log_arrays']['fsm_tilt']) * 1000,
+                 color=ControllerColors.PID, linewidth=lw, label='PID Tilt [mdeg]', alpha=alpha)
+        ax2.plot(self._t_fbl, np.rad2deg(self._results_fbl['log_arrays']['fsm_tilt']) * 1000,
+                 color=ControllerColors.FBL, linewidth=lw, label='FBL Tilt [mdeg]', alpha=alpha)
+        ax2.plot(self._t_ndob, np.rad2deg(self._results_ndob['log_arrays']['fsm_tilt']) * 1000,
+                 color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB Tilt [mdeg]', alpha=alpha)
+                 
+       # ax2_cmd = ax2.twinx()
+       # ax2_cmd.set_ylabel('Command [V]', fontsize=self.style.axis_label_fontsize, fontweight='bold', color='gray')
+       # ax2_cmd.plot(self._t_pid, np.array(self._results_pid['log_arrays']['fsm_cmd_tilt']),
+             #    color=ControllerColors.PID, linewidth=2.0, linestyle='--', alpha=0.3, label='PID Cmd [V]')
+        #ax2_cmd.plot(self._t_fbl, np.array(self._results_fbl['log_arrays']['fsm_cmd_tilt']),
+        #         color=ControllerColors.FBL, linewidth=1, linestyle='--', alpha=0.3, label='FBL Cmd [V]')
+        #ax2_cmd.plot(self._t_ndob, np.array(self._results_ndob['log_arrays']['fsm_cmd_tilt']),
+              #   color=ControllerColors.FBL_NDOB, linewidth=1, linestyle='--', alpha=0.3, label='NDOB Cmd [V]')
+
+        # FSM Stroke Limit lines 
+        limit_rad = np.array(self._results_ndob['log_arrays'].get('fsm_stroke_limit_rad', np.full(len(self._t_ndob), 0.010)))
+        limit_mdeg = np.rad2deg(limit_rad) * 1000.0
+        ax2.plot(self._t_ndob, limit_mdeg, color='red', linewidth=lw, linestyle='--', alpha=0.5, label='FSM Stroke / QPD Limit')
+        ax2.plot(self._t_ndob, -limit_mdeg, color='red', linewidth=lw, linestyle='--', alpha=0.5)
+
+        ax2.set_ylabel('Tilt [mdeg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
+        ax2.legend(loc='upper left', fontsize=self.style.legend_fontsize)
+       # ax2_cmd.legend(loc='upper right', fontsize=self.style.legend_fontsize)
         ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
-        fig.suptitle('FSM Tip/Tilt Response vs Commands',
-                     fontsize=self.style.suptitle_fontsize, fontweight='bold')
+        # ── Panel 3 (Fix 4): Post-FSM Residual LOS Error ─────────────────────
+        # This is the DEFINITIVE performance metric: what the QPD actually senses.
+        # It is the LOS error AFTER the FSM has applied its correction (2×θ_fsm).
+        # A converging residual ≈ 0 proves the FSM is working.
+        # Persistent oscillations here indicate true closed-loop instability.
+        _to_urad = 1e6  # rad → µrad conversion
+        
+        # Safe accessor — key present only in simulations with Fix 3 applied
+        def _get_residual(results, key):
+            arr = results['log_arrays'].get(key, None)
+            if arr is None:
+                # Fall back: reconstruct from los_error and fsm angle
+                los  = np.array(results['log_arrays'].get('los_error_x' if 'x' in key else 'los_error_y', [0]))
+                fsm  = np.array(results['log_arrays'].get('fsm_tip' if 'x' in key else 'fsm_tilt', [0]))
+                return los - 2.0 * fsm
+            return np.array(arr)
+
+        res_pid_x  = _get_residual(self._results_pid,  'fsm_residual_error_x') * _to_urad
+        res_fbl_x  = _get_residual(self._results_fbl,  'fsm_residual_error_x') * _to_urad
+        res_ndob_x = _get_residual(self._results_ndob, 'fsm_residual_error_x') * _to_urad
+        res_pid_y  = _get_residual(self._results_pid,  'fsm_residual_error_y') * _to_urad
+        res_fbl_y  = _get_residual(self._results_fbl,  'fsm_residual_error_y') * _to_urad
+        res_ndob_y = _get_residual(self._results_ndob, 'fsm_residual_error_y') * _to_urad
+        
+        ax3.plot(self._t_pid,  res_pid_x,  color=ControllerColors.PID,      linewidth=lw,  label='PID X',      alpha=alpha)
+        ax3.plot(self._t_fbl,  res_fbl_x,  color=ControllerColors.FBL,      linewidth=lw,  label='FBL X',      alpha=alpha)
+        ax3.plot(self._t_ndob, res_ndob_x, color=ControllerColors.FBL_NDOB, linewidth=lw,  label='NDOB X',     alpha=alpha)
+        ax3.plot(self._t_pid,  res_pid_y,  color=ControllerColors.PID,      linewidth=lw,  label='PID Y',      alpha=alpha, linestyle='--')
+        ax3.plot(self._t_fbl,  res_fbl_y,  color=ControllerColors.FBL,      linewidth=lw,  label='FBL Y',      alpha=alpha, linestyle='--')
+        ax3.plot(self._t_ndob, res_ndob_y, color=ControllerColors.FBL_NDOB, linewidth=lw,  label='NDOB Y',     alpha=alpha, linestyle='--')
+        
+        # ±1 µrad target band (sub-µrad FSO link budget requirement)
+        ax3.axhspan(-1.0, 1.0, alpha=0.12, color='green', label='±1 µrad target band')
+        ax3.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
+        ax3.set_ylabel('Residual LOS Error [µrad]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
+        ax3.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
+        ax3.legend(loc='upper right', fontsize=self.style.legend_fontsize, ncol=3)
+        ax3.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
+        
+        # RMS residual for the NDOB case (best performer)
+        t_ndob = np.array(self._t_ndob)
+        if len(t_ndob) > 10:
+            steady_start = t_ndob[-1] * 0.5          # Last 50% of simulation
+            mask = t_ndob >= steady_start
+            if mask.sum() > 0:
+                rms_x = float(np.sqrt(np.mean(res_ndob_x[mask]**2)))
+                rms_y = float(np.sqrt(np.mean(res_ndob_y[mask]**2)))
+                ax3.set_title(f'Post-FSM Residual (FBL+NDOB steady-state RMS: X={rms_x:.2f} µrad, Y={rms_y:.2f} µrad)',
+                              fontsize=self.style.title_fontsize - 1, fontweight='bold')
         
         return fig
+
     
     def _plot_internal_signals(self) -> plt.Figure:
         """Figure 10: Internal Control Signal & Disturbance Observer."""
-        fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=self.style.get_figure_size('3x1_tall'),
+        fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=self.style.get_figure_size('3x1_tall'),
                                              sharex=True, constrained_layout=self._get_layout_mode())
         
         lw = self.style.linewidth_primary
@@ -909,8 +996,8 @@ class ResearchComparisonPlotter:
         ax1.plot(self._t_ndob, v_el_ndob, color=ControllerColors.FBL_NDOB, linewidth=lw, label='FBL+NDOB El', alpha=0.7, linestyle='-.')
         ax1.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
         ax1.set_ylabel(r'Virtual Control $v$ [rad/s²]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax1.set_title(r'Virtual Control Input (Outer Loop $v = \ddot{q}_{ref} + K_p e + K_d \dot{e}$)',
-                      fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax1.set_title(r'Virtual Control Input (Outer Loop $v = \ddot{q}_{ref} + K_p e + K_d \dot{e}$)',
+        #              fontsize=self.style.title_fontsize, fontweight='bold')
         ax1.legend(loc='best', fontsize=self.style.legend_fontsize, ncol=2)
         ax1.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -923,8 +1010,8 @@ class ResearchComparisonPlotter:
         ax2.axhline(1.0, color='red', linewidth=lw, linestyle=':', alpha=0.6, label='Saturation')
         ax2.axhline(-1.0, color='red', linewidth=lw, linestyle=':', alpha=0.6)
         ax2.set_ylabel(r'Torque $\tau$ [N·m]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax2.set_title(r'Commanded Motor Torque ($\tau = Mv + C\dot{q} + G - \hat{d}$)',
-                      fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax2.set_title(r'Commanded Motor Torque ($\tau = Mv + C\dot{q} + G - \hat{d}$)',
+        #              fontsize=self.style.title_fontsize, fontweight='bold')
         ax2.legend(loc='best', fontsize=self.style.legend_fontsize, ncol=2)
         ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
@@ -937,14 +1024,32 @@ class ResearchComparisonPlotter:
                  label='Ground Truth El', alpha=0.7)
         ax3.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5, label='Zero Disturbance')
         ax3.set_ylabel(r'Disturbance $\hat{d}$ [N·m]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax3.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax3.set_title(r'NDOB Disturbance Estimate ($\hat{d} = z + L M(q) \dot{q}$)',
-                      fontsize=self.style.title_fontsize, fontweight='bold')
+        #ax3.set_title(r'NDOB Disturbance Estimate ($\hat{d} = z + L M(q) \dot{q}$)',
+        #              fontsize=self.style.title_fontsize, fontweight='bold')
         ax3.legend(loc='best', fontsize=self.style.legend_fontsize, ncol=2)
         ax3.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
-        fig.suptitle('Figure 10: Internal Control Signal & Disturbance Observer Analysis',
-                     fontsize=self.style.suptitle_fontsize, fontweight='bold')
+        # Subplot 4 (Fix 5): FSM PID P-term vs I-state — limit-cycle diagnostic
+        # Diagnostic rule:
+        #   • I-term pegged at ±50V while P-term alternates rapidly → integrator limit cycle
+        #   • Both terms bounded and decreasing → healthy convergence
+        for results, t_arr, label, color in [
+            (self._results_pid,  self._t_pid,  'PID',      ControllerColors.PID),
+            (self._results_ndob, self._t_ndob, 'FBL+NDOB', ControllerColors.FBL_NDOB),
+        ]:
+            log = results['log_arrays']
+            n   = len(t_arr)
+            p_tip = np.array(log.get('fsm_pid_p_tip', np.zeros(n)))
+            i_tip = np.array(log.get('fsm_pid_i_tip', np.zeros(n)))
+            ax4.plot(t_arr, p_tip, color=color, linewidth=lw, linestyle='-',  alpha=alpha,  label=f'{label} P-term [V]')
+            ax4.plot(t_arr, i_tip, color=color, linewidth=lw, linestyle='--', alpha=alpha,  label=f'{label} I-state [V]')
+        ax4.axhline( 50.0, color='red', linewidth=lw, linestyle=':', alpha=0.6, label='+50 V rail')
+        ax4.axhline(-50.0, color='red', linewidth=lw, linestyle=':', alpha=0.6, label='-50 V rail')
+        ax4.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.4)
+        ax4.set_ylabel('FSM PID Terms [V]\n(Tip axis)', fontsize=self.style.axis_label_fontsize, fontweight='bold')
+        ax4.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
+        ax4.legend(loc='best', fontsize=self.style.legend_fontsize, ncol=2)
+        ax4.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
         return fig
     
@@ -961,14 +1066,14 @@ class ResearchComparisonPlotter:
             ax1.semilogy(t, log['ekf_cov_theta_dot_az'], 'r-', linewidth=2, label=r'$P_{\dot{\theta}_{Az}}$')
             ax1.semilogy(t, log['ekf_cov_bias_az'], 'g-', linewidth=2, label=r'$P_{b_{Az}}$')
             ax1.set_ylabel('Covariance Diagonal', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-            ax1.set_title('(a) EKF State Covariance Evolution (Log Scale)',
-                          fontsize=self.style.title_fontsize, fontweight='bold')
+            #ax1.set_title('(a) EKF State Covariance Evolution (Log Scale)',
+            #              fontsize=self.style.title_fontsize, fontweight='bold')
             ax1.legend(loc='best', fontsize=self.style.legend_fontsize, ncol=3)
         else:
             ax1.text(0.5, 0.5, 'EKF Covariance Logging Not Yet Implemented\n(Requires simulation_runner enhancement)',
                      ha='center', va='center', transform=ax1.transAxes, fontsize=self.style.axis_label_fontsize)
             ax1.set_ylabel('Covariance', fontsize=self.style.axis_label_fontsize)
-            ax1.set_title('(a) EKF State Covariance Evolution', fontsize=self.style.title_fontsize, fontweight='bold')
+            #ax1.set_title('(a) EKF State Covariance Evolution', fontsize=self.style.title_fontsize, fontweight='bold')
         ax1.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
         # Subplot 2: Innovation Residuals
@@ -977,14 +1082,14 @@ class ResearchComparisonPlotter:
             ax2.plot(t, np.rad2deg(log['ekf_innovation_enc_el']), 'r-', linewidth=2, label='Encoder El Innovation')
             ax2.axhline(0, color='k', linestyle='--', linewidth=2, alpha=0.5)
             ax2.set_ylabel('Innovation [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-            ax2.set_title('(b) Measurement Innovation (Encoder Residuals)',
-                          fontsize=self.style.title_fontsize, fontweight='bold')
+            #ax2.set_title('(b) Measurement Innovation (Encoder Residuals)',
+            #              fontsize=self.style.title_fontsize, fontweight='bold')
             ax2.legend(loc='best', fontsize=self.style.legend_fontsize)
         else:
             ax2.text(0.5, 0.5, 'Innovation Logging Not Yet Implemented',
                      ha='center', va='center', transform=ax2.transAxes, fontsize=self.style.axis_label_fontsize)
             ax2.set_ylabel('Innovation [deg]', fontsize=self.style.axis_label_fontsize)
-            ax2.set_title('(b) Measurement Innovation', fontsize=self.style.title_fontsize, fontweight='bold')
+           # ax2.set_title('(b) Measurement Innovation', fontsize=self.style.title_fontsize, fontweight='bold')
         ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
         # Subplot 3: 3-Sigma Bounds
@@ -998,19 +1103,19 @@ class ResearchComparisonPlotter:
                            color='red', marker='x', s=100, linewidths=2, label='3σ Violation', zorder=10)
             ax3.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
             ax3.set_ylabel('Innovation [deg]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-            ax3.set_title('(c) Innovation Bounds & Consistency Check',
-                          fontsize=self.style.title_fontsize, fontweight='bold')
+            #ax3.set_title('(c) Innovation Bounds & Consistency Check',
+                          #fontsize=self.style.title_fontsize, fontweight='bold')
             ax3.legend(loc='best', fontsize=self.style.legend_fontsize)
         else:
             ax3.text(0.5, 0.5, '3-Sigma Bounds Logging Not Yet Implemented',
                      ha='center', va='center', transform=ax3.transAxes, fontsize=self.style.axis_label_fontsize)
             ax3.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize)
             ax3.set_ylabel('Innovation [deg]', fontsize=self.style.axis_label_fontsize)
-            ax3.set_title('(c) Innovation Consistency Check', fontsize=self.style.title_fontsize, fontweight='bold')
+           # ax3.set_title('(c) Innovation Consistency Check', fontsize=self.style.title_fontsize, fontweight='bold')
         ax3.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
-        fig.suptitle('Figure 11: Extended Kalman Filter Diagnostics & Adaptive Tuning',
-                     fontsize=self.style.suptitle_fontsize, fontweight='bold')
+        #fig.suptitle('Figure 11: Extended Kalman Filter Diagnostics & Adaptive Tuning',
+                    # fontsize=self.style.suptitle_fontsize, fontweight='bold')
         
         return fig
     
@@ -1046,8 +1151,8 @@ class ResearchComparisonPlotter:
             ax1.axhline(mean_az - 2*std_az, color='orange', linewidth=lw, linestyle='--', alpha=0.6)
             ax1.set_ylabel(r'Torque [mN·m]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
             ax1.set_xlabel('Time (s)', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-            ax1.set_title('(a) Total Environmental Disturbance — Azimuth Axis',
-                          fontsize=self.style.title_fontsize, fontweight='bold')
+            #ax1.set_title('(a) Total Environmental Disturbance — Azimuth Axis',
+                          #fontsize=self.style.title_fontsize, fontweight='bold')
             ax1.legend(loc='upper right', fontsize=self.style.legend_fontsize, framealpha=0.95)
             ax1.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
             ax1.set_xlim([t[0], t[-1]])
@@ -1063,8 +1168,8 @@ class ResearchComparisonPlotter:
             ax2.axhline(mean_el - 2*std_el, color='orange', linewidth=lw, linestyle='--', alpha=0.6)
             ax2.set_ylabel(r'Torque [mN·m]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
             ax2.set_xlabel('Time (s)', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-            ax2.set_title('(b) Total Environmental Disturbance — Elevation Axis',
-                          fontsize=self.style.title_fontsize, fontweight='bold')
+            #ax2.set_title('(b) Total Environmental Disturbance — Elevation Axis',
+            #              fontsize=self.style.title_fontsize, fontweight='bold')
             ax2.legend(loc='upper right', fontsize=self.style.legend_fontsize, framealpha=0.95)
             ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
             ax2.set_xlim([t[0], t[-1]])
@@ -1075,8 +1180,8 @@ class ResearchComparisonPlotter:
             ax3.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
             ax3.set_ylabel(r'Torque [mN·m]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
             ax3.set_xlabel('Time (s)', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-            ax3.set_title('(c) Disturbance Components — Azimuth Axis',
-                          fontsize=self.style.title_fontsize, fontweight='bold')
+            #ax3.set_title('(c) Disturbance Components — Azimuth Axis',
+            #              fontsize=self.style.title_fontsize, fontweight='bold')
             ax3.legend(loc='best', fontsize=self.style.legend_fontsize, framealpha=0.95)
             ax3.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
             ax3.set_xlim([t[0], t[-1]])
@@ -1087,8 +1192,8 @@ class ResearchComparisonPlotter:
             ax4.axhline(0, color='black', linewidth=lw, linestyle='--', alpha=0.5)
             ax4.set_ylabel(r'Torque [mN·m]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
             ax4.set_xlabel('Time (s)', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-            ax4.set_title('(d) Disturbance Components — Elevation Axis',
-                          fontsize=self.style.title_fontsize, fontweight='bold')
+           # ax4.set_title('(d) Disturbance Components — Elevation Axis',
+           #               fontsize=self.style.title_fontsize, fontweight='bold')
             ax4.legend(loc='best', fontsize=self.style.legend_fontsize, framealpha=0.95)
             ax4.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
             ax4.set_xlim([t[0], t[-1]])
@@ -1108,10 +1213,10 @@ class ResearchComparisonPlotter:
                         fontfamily='monospace', bbox=dict(boxstyle='round', facecolor='lightyellow', alpha=0.9))
                 ax.set_xlabel('Time (s)', fontsize=self.style.axis_label_fontsize, fontweight='bold')
                 ax.set_ylabel('Torque [mN·m]', fontsize=self.style.axis_label_fontsize)
-                ax.set_title(title, fontsize=self.style.title_fontsize, fontweight='bold')
+              #  ax.set_title(title, fontsize=self.style.title_fontsize, fontweight='bold')
         
-        fig.suptitle(r'(Dryden Wind Turbulence + PSD-Based Structural Vibration — Plant Injection Only)',
-                     fontsize=self.style.suptitle_fontsize, fontweight='bold')
+        #fig.suptitle(r'(Dryden Wind Turbulence + PSD-Based Structural Vibration — Plant Injection Only)',
+                    # fontsize=self.style.suptitle_fontsize, fontweight='bold')
         
         return fig
     
@@ -1147,8 +1252,8 @@ class ResearchComparisonPlotter:
             
             ax1.set_xlabel(r'Disturbance Torque $\tau_d$ [mN·m]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
             ax1.set_ylabel('Probability Density', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-            ax1.set_title('(a) Disturbance Torque Statistical Distribution & Gaussian Fit',
-                          fontsize=self.style.title_fontsize, fontweight='bold')
+     #       ax1.set_title('(a) Disturbance Torque Statistical Distribution & Gaussian Fit',
+                 #         fontsize=self.style.title_fontsize, fontweight='bold')
             ax1.legend(loc='upper right', fontsize=self.style.legend_fontsize, framealpha=0.95)
             ax1.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
             
@@ -1185,8 +1290,8 @@ class ResearchComparisonPlotter:
                 
                 ax2.set_xlabel('Frequency [Hz]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
                 ax2.set_ylabel(r'PSD [(mN·m)²/Hz]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-                ax2.set_title('(b) Power Spectral Density of Disturbance Torques',
-                              fontsize=self.style.title_fontsize, fontweight='bold')
+               # ax2.set_title('(b) Power Spectral Density of Disturbance Torques',
+                             # fontsize=self.style.title_fontsize, fontweight='bold')
                 ax2.legend(loc='upper right', fontsize=self.style.legend_fontsize, framealpha=0.95)
                 ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle, which='both')
                 ax2.set_xlim([0, min(fs/2, 200)])
@@ -1195,19 +1300,19 @@ class ResearchComparisonPlotter:
                          ha='center', va='center', transform=ax2.transAxes, fontsize=self.style.axis_label_fontsize)
                 ax2.set_xlabel('Frequency [Hz]', fontsize=self.style.axis_label_fontsize)
                 ax2.set_ylabel('PSD', fontsize=self.style.axis_label_fontsize)
-                ax2.set_title('(b) Power Spectral Density', fontsize=self.style.title_fontsize, fontweight='bold')
+               # ax2.set_title('(b) Power Spectral Density', fontsize=self.style.title_fontsize, fontweight='bold')
             
-            fig.suptitle('Figure 13: Environmental Disturbance Torque Statistics & Frequency Analysis',
-                         fontsize=self.style.suptitle_fontsize, fontweight='bold')
+           # fig.suptitle('Figure 13: Environmental Disturbance Torque Statistics & Frequency Analysis',
+                       # fontsize=self.style.suptitle_fontsize, fontweight='bold')
         else:
             ax1.text(0.5, 0.5, 'No disturbance data available', ha='center', va='center',
                      transform=ax1.transAxes, fontsize=self.style.axis_label_fontsize)
-            ax1.set_title('Figure 13a: Disturbance Statistics (No Data)',
-                          fontsize=self.style.title_fontsize, fontweight='bold')
+            # ax1.set_title('Figure 13a: Disturbance Statistics (No Data)',
+            #               fontsize=self.style.title_fontsize, fontweight='bold')
             ax2.text(0.5, 0.5, 'No disturbance data available', ha='center', va='center',
                      transform=ax2.transAxes, fontsize=self.style.axis_label_fontsize)
-            ax2.set_title('Figure 13b: PSD Analysis (No Data)',
-                          fontsize=self.style.title_fontsize, fontweight='bold')
+            # ax2.set_title('Figure 13b: PSD Analysis (No Data)',
+            #               fontsize=self.style.title_fontsize, fontweight='bold')
         
         return fig
     

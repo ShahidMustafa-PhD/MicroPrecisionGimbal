@@ -45,16 +45,24 @@ Date: January 20, 2026
 
 import numpy as np
 from typing import Tuple, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
 class FsmPidGains:
     """PID controller gains for one axis."""
-    Kp: float  # Proportional gain
-    Ki: float  # Integral gain [1/s]
-    Kd: float  # Derivative gain [s]
-    N: float   # Derivative filter coefficient (dimensionless)
+    Kp: float        # Proportional gain
+    Ki: float        # Integral gain [1/s]
+    Kd: float        # Derivative gain [s]
+    omega_f: float   # Derivative filter cutoff frequency [rad/s]
+
+@dataclass
+class NotchFilterConfig:
+    """Configuration for a structural notch filter."""
+    enabled: bool = False
+    f_center_hz: float = 1000.0  # Center frequency of the notch
+    zeta_zero: float = 0.01      # Depth of the notch (smaller = deeper)
+    zeta_pole: float = 0.707      # Width of the notch (larger = wider)
 
 
 @dataclass
@@ -66,9 +74,12 @@ class FsmControllerConfig:
     # Tilt axis gains
     tilt_gains: FsmPidGains
     
+    # Structural Filter
+    notch_config: NotchFilterConfig = field(default_factory=NotchFilterConfig)
+    
     # Actuator limits (voltage or normalized command)
-    u_min: float = -2.0  # Minimum command [V]
-    u_max: float = 2.0   # Maximum command [V]
+    u_min: float = -50.0  # Minimum command [V] (Updated to PI limits)
+    u_max: float = 50.0   # Maximum command [V]
     
     # Anti-windup gain (back-calculation method)
     # Kb = 1/Ti is common choice where Ti = Kp/Ki
@@ -124,6 +135,7 @@ class FsmPidController:
         """
         self.tip_gains = config.tip_gains
         self.tilt_gains = config.tilt_gains
+        self.notch_config = config.notch_config
         self.u_min = config.u_min
         self.u_max = config.u_max
         self.Kb_tip = config.Kb_tip
@@ -135,6 +147,17 @@ class FsmPidController:
         self._error_prev = np.zeros(2)    # Previous error for derivative
         self._initialized = False         # First-call flag
         
+        # Biquad Notch Filter States: x = input, y = output. [tip, tilt]
+        self._notch_x1 = np.zeros(2) # x[k-1]
+        self._notch_x2 = np.zeros(2) # x[k-2]
+        self._notch_y1 = np.zeros(2) # y[k-1]
+        self._notch_y2 = np.zeros(2) # y[k-2]
+        
+        # Store dt to recompute notch coefficients only if dt changes
+        self._last_dt = -1.0
+        self._b = np.zeros(3)
+        self._a = np.zeros(3)
+        
         # Validate gains
         self._validate_gains()
     
@@ -143,14 +166,39 @@ class FsmPidController:
         assert self.tip_gains.Kp > 0, "Tip Kp must be positive"
         assert self.tip_gains.Ki >= 0, "Tip Ki must be non-negative"
         assert self.tip_gains.Kd >= 0, "Tip Kd must be non-negative"
-        assert self.tip_gains.N > 0, "Tip N must be positive"
+        assert self.tip_gains.omega_f > 0, "Tip omega_f must be positive"
         
         assert self.tilt_gains.Kp > 0, "Tilt Kp must be positive"
         assert self.tilt_gains.Ki >= 0, "Tilt Ki must be non-negative"
         assert self.tilt_gains.Kd >= 0, "Tilt Kd must be non-negative"
-        assert self.tilt_gains.N > 0, "Tilt N must be positive"
+        assert self.tilt_gains.omega_f > 0, "Tilt omega_f must be positive"
         
         assert self.u_max > self.u_min, "u_max must be > u_min"
+
+    def _compute_notch_coefficients(self, dt: float) -> None:
+        """Compute digital biquad coefficients using Tustin transform with pre-warping."""
+        if not self.notch_config.enabled:
+            return
+            
+        wn = 2.0 * np.pi * self.notch_config.f_center_hz
+        zz = self.notch_config.zeta_zero
+        zp = self.notch_config.zeta_pole
+        
+        # Pre-warped frequency to ensure exact notch placement in discrete time
+        W = np.tan(wn * dt / 2.0)
+        
+        # Bilinear transform denominators and numerators
+        den = 1.0 + 2.0 * zp * W + W**2
+        
+        self._b[0] = (1.0 + 2.0 * zz * W + W**2) / den
+        self._b[1] = (2.0 * (W**2 - 1.0)) / den
+        self._b[2] = (1.0 - 2.0 * zz * W + W**2) / den
+        
+        # Note: a0 = 1.0 by definition
+        self._a[1] = (2.0 * (W**2 - 1.0)) / den
+        self._a[2] = (1.0 - 2.0 * zp * W + W**2) / den
+        
+        self._last_dt = dt
     
     def reset(self) -> None:
         """
@@ -164,6 +212,10 @@ class FsmPidController:
         self._derivative = np.zeros(2)
         self._error_prev = np.zeros(2)
         self._initialized = False
+        self._notch_x1.fill(0.0)
+        self._notch_x2.fill(0.0)
+        self._notch_y1.fill(0.0)
+        self._notch_y2.fill(0.0)
     
     def hold_integrator(self) -> None:
         """
@@ -186,117 +238,79 @@ class FsmPidController:
         self._derivative = np.zeros(2)
         # Integrator keeps its current value (no reset, just no accumulation)
     
-    def update(self, 
-               setpoint: np.ndarray, 
-               measurement: np.ndarray, 
-               dt: float) -> np.ndarray:
-        """
-        Compute control command for one time step.
-        
-        Implementation Details:
-        ----------------------
-        1. **Error Computation**: e = setpoint - measurement
-        
-        2. **Proportional Term**: Straightforward multiplication
-        
-        3. **Integral Term**: Trapezoidal (Tustin) integration with anti-windup
-           - Trapezoidal: More accurate than Forward Euler, avoids DC bias
-           - Back-calculation anti-windup: When actuator saturates, the
-             integral is adjusted to prevent windup
-        
-        4. **Derivative Term**: First-order low-pass filtered derivative
-           - Filter equation: D[k] = α*D[k-1] + (1-α)*Kd*(e[k]-e[k-1])/dt
-           - α = 1/(1 + N*ωc*dt) where ωc is crossover frequency
-           - Prevents derivative kick on setpoint changes
-        
-        5. **Saturation**: Clamp final command to actuator limits
-        
-        Parameters
-        ----------
-        setpoint : np.ndarray
-            Desired output (2,) - [θ_tip_des, θ_tilt_des] in radians
-        measurement : np.ndarray
-            Measured output (2,) - [θ_tip_meas, θ_tilt_meas] in radians
-        dt : float
-            Time step [s]. Must be > 0.
-        
-        Returns
-        -------
-        np.ndarray
-            Control command (2,) - [u_tip, u_tilt] in volts (or normalized)
-        """
-        assert setpoint.shape == (2,), f"setpoint must be (2,), got {setpoint.shape}"
-        assert measurement.shape == (2,), f"measurement must be (2,), got {measurement.shape}"
-        assert dt > 0, f"dt must be positive, got {dt}"
-        
-        # Compute error
+    def update(self, setpoint: np.ndarray, measurement: np.ndarray, dt: float) -> np.ndarray:
+        if self.notch_config.enabled and dt != self._last_dt:
+            self._compute_notch_coefficients(dt)
+            
         error = setpoint - measurement
         
-        # Handle first call (no previous error for derivative)
         if not self._initialized:
             self._error_prev = error.copy()
             self._initialized = True
-        
-        # Unpack gains for readability
+            
         Kp = np.array([self.tip_gains.Kp, self.tilt_gains.Kp])
         Ki = np.array([self.tip_gains.Ki, self.tilt_gains.Ki])
         Kd = np.array([self.tip_gains.Kd, self.tilt_gains.Kd])
-        N = np.array([self.tip_gains.N, self.tilt_gains.N])
-        Kb = np.array([self.Kb_tip, self.Kb_tilt])
+        omega_f = np.array([self.tip_gains.omega_f, self.tilt_gains.omega_f])
         
-        # ====================================================================
-        # PROPORTIONAL TERM
-        # ====================================================================
+        # 1. Proportional Term
         P = Kp * error
         
-        # ====================================================================
-        # INTEGRAL TERM (Trapezoidal Integration)
-        # ====================================================================
-        # Trapezoidal: I[k] = I[k-1] + (Ki*dt/2) * (e[k] + e[k-1])
-        # This will be adjusted for anti-windup after saturation check
-        I_increment = (Ki * dt / 2.0) * (error + self._error_prev)
-        I_tentative = self._integral + I_increment
-        
-        # ====================================================================
-        # DERIVATIVE TERM (Filtered)
-        # ====================================================================
-        # First-order low-pass filter on derivative
-        # α = dt / (dt + τ_f) where τ_f = 1/(N*ωc)
-        # For typical FSM: ωc ~ 2π*150 rad/s, N ~ 15
-        # τ_f ~ 0.0007 s, so for dt=0.001s, α ~ 0.59
-        
-        # Approximation: α ≈ 1 / (1 + N*ωc*dt)
-        # Assuming ωc ~ Ki/Kp for simplicity (crossover near integral corner)
-        omega_c = Ki / Kp  # Approximate crossover frequency [rad/s]
-        omega_c = np.where(omega_c > 0, omega_c, 1.0)  # Avoid division by zero
-        
-        alpha = 1.0 / (1.0 + N * omega_c * dt)
-        
-        # Derivative of error
+        # 2. Filtered Derivative Term
+        alpha = 1.0 / (1.0 + omega_f * dt)
         de_dt = (error - self._error_prev) / dt
-        
-        # Filtered derivative: D[k] = α*D[k-1] + (1-α)*Kd*de_dt
         D = alpha * self._derivative + (1.0 - alpha) * Kd * de_dt
         
-        # ====================================================================
-        # TOTAL COMMAND (before saturation)
-        # ====================================================================
-        u_unsaturated = P + I_tentative + D
+        # 3. CONDITIONAL INTEGRATION (The Fix for the Limit Cycle)
+        # Calculate a rough estimate of the command to check for saturation
+        u_estimate = P + D + self._integral
         
-        # ====================================================================
-        # SATURATION
-        # ====================================================================
-        u_saturated = np.clip(u_unsaturated, self.u_min, self.u_max)
+        # Determine if the actuator is saturated AND the error is pushing it deeper into saturation
+        is_saturated_max = (u_estimate >= self.u_max) & (error > 0)
+        is_saturated_min = (u_estimate <= self.u_min) & (error < 0)
         
-        # ====================================================================
-        # ANTI-WINDUP (Back-Calculation Method)
-        # ====================================================================
-        # If actuator saturates, adjust integral to prevent windup
-        # I[k] = I_tentative + Kb * (u_saturated - u_unsaturated)
-        saturation_error = u_saturated - u_unsaturated
-        self._integral = I_tentative + Kb * saturation_error
+        # Only add to the integrator if we are NOT saturated in the direction of the error
+        I_increment = np.zeros(2)
+        for i in range(2):
+            if not (is_saturated_max[i] or is_saturated_min[i]):
+                I_increment[i] = (Ki[i] * dt / 2.0) * (error[i] + self._error_prev[i])
+                
+        I_tentative = self._integral + I_increment
         
-        # Update states for next iteration
+        # 4. Base PID Command
+        u_pid = P + I_tentative + D
+        
+        # 4.5. Pre-Notch Saturation
+        # CRITICAL FIX for bang-bang limit cycles:
+        # A hard clipper (saturation) generates infinite frequencies. If we saturate AFTER 
+        # the notch filter, the flat-topping acts as a hard step into the plant, completely 
+        # bypassing the notch filter's protection and wildly exciting the 1000 Hz resonance.
+        # We MUST saturate the PID output first, then filter the resulting square-wave
+        # edges to remove the 1000 Hz spectral content, before sending it to the plant.
+        u_pid_sat = np.clip(u_pid, self.u_min, self.u_max)
+        
+        # 5. Notch Filter
+        if self.notch_config.enabled:
+            u_notch = (self._b[0] * u_pid_sat + 
+                       self._b[1] * self._notch_x1 + 
+                       self._b[2] * self._notch_x2 - 
+                       self._a[1] * self._notch_y1 - 
+                       self._a[2] * self._notch_y2)
+            
+            self._notch_x2 = self._notch_x1.copy()
+            self._notch_x1 = u_pid_sat.copy()
+            self._notch_y2 = self._notch_y1.copy()
+            self._notch_y1 = u_notch.copy()
+        else:
+            u_notch = u_pid_sat
+            
+        # 6. Final Hardware Protection Saturation
+        # The notch step response may overshoot slightly (~5%), so we maintain a final
+        # hard clamp to protect the physical amplifier.
+        u_saturated = np.clip(u_notch, self.u_min, self.u_max)
+        
+        # 7. State Updates
+        self._integral = I_tentative.copy()
         self._derivative = D.copy()
         self._error_prev = error.copy()
         
@@ -347,85 +361,76 @@ class FsmPidController:
         """
         return self.tip_gains, self.tilt_gains
 
-
-def create_fsm_controller_from_design(bandwidth_hz: float = 5.0) -> FsmPidController:
+def create_fsm_controller_from_design(json_path: str = "fsm_controller_gains.json") -> FsmPidController:
     """
-    Factory function to create FSM controller with gains from control design.
-    
-    This loads the tuned PI gains optimized for the FSM state-space model.
-    The gains are designed to:
-    - Avoid exciting the plant resonances at 20-23 Hz (low bandwidth)
-    - Achieve zero steady-state error via integral action
-    - Provide stable, well-damped response
-    
-    CRITICAL: The FSM state-space model has DC gain ~47 (from modal reduction).
-    Controller gains are tuned for this plant, NOT a normalized plant.
-    
-    Plant resonances: 20 Hz and 23 Hz (from modal analysis)
-    Recommended bandwidth: < 10 Hz to avoid resonance excitation
-    
-    Parameters
-    ----------
-    bandwidth_hz : float
-        Target closed-loop bandwidth [Hz]. Default 5 Hz (conservative).
-        For higher bandwidth, ensure adequate phase margin at resonances.
-    
-    Returns
-    -------
-    FsmPidController
-        Configured controller instance
+    Factory function that dynamically loads the optimal FSM controller gains
+    directly from the JSON file generated by the offline design script.
     """
-    # FSM plant DC gain from state-space model: G(0) = -C*A^(-1)*B
-    # Diagonal elements: ~47 (tip), ~48 (tilt)
-    FSM_DC_GAIN = 47.0
+    import numpy as np
+    import json
+    import os
     
-    # Plant resonances at 20-23 Hz from modal analysis
-    # To avoid exciting resonances, keep closed-loop bandwidth below 10 Hz
-    # 
-    # Design strategy:
-    # 1. Proportional gain sets the loop gain: K_loop = Kp * FSM_DC_GAIN * 2 (2x from optical)
-    #    For stable response, K_loop ~ 2-3 at DC
-    # 2. Integral gain provides zero SSE: Ki should be low to avoid resonance excitation
-    #    Time constant Ti = Kp/Ki should be ~1-2 seconds for smooth convergence
-    # 3. Derivative disabled (Kd=0) to avoid noise amplification from QPD
+    # 1. Check if the design file exists
+    if not os.path.exists(json_path):
+        raise FileNotFoundError(
+            f"Cannot find FSM design file: '{json_path}'. "
+            f"Please run FSM_control_design.py first to generate the controller gains."
+        )
+        
+    # 2. Load the JSON configuration
+    with open(json_path, 'r') as f:
+        design_data = json.load(f)
+        
+    # Extract the PIDF dictionary and Notch dictionary
+    pidf = design_data['pidf_controller']
+    notch = pidf['notch']
     
-    # Proportional gain: Kp * 47 * 2 ≈ 2 (loop gain)
-    # Kp = 2 / (47 * 2) ≈ 0.02
-    Kp_tip = 0.02
-    Kp_tilt = 0.02
+    # Calculate crossover frequency in rad/s to compute omega_f
+    omega_c = 2.0 * np.pi * pidf['crossover_freq_hz']
     
-    # Integral gain: For Ti = 2 seconds settling, Ki = Kp / Ti
-    # Ki = 0.02 / 0.04 = 0.5 (gives settling in ~400ms)
-    Ki_tip = 0.5
-    Ki_tilt = 0.5
+    # 3. Dynamically populate Tip Gains
+    tip_gains = FsmPidGains(
+        Kp=pidf['Kp_tip'], 
+        Ki=pidf['Ki_tip'], 
+        Kd=pidf['Kd_tip'], 
+        omega_f=pidf['N_tip'] * omega_c  # Convert N to rad/s
+    )
     
-    # Derivative: Disabled for stability with resonant plant
-    Kd_tip = 0.0
-    Kd_tilt = 0.0
+    # 4. Dynamically populate Tilt Gains
+    tilt_gains = FsmPidGains(
+        Kp=pidf['Kp_tilt'], 
+        Ki=pidf['Ki_tilt'], 
+        Kd=pidf['Kd_tilt'], 
+        omega_f=pidf['N_tilt'] * omega_c # Convert N to rad/s
+    )
     
-    # Derivative filter coefficient (unused when Kd=0, but set reasonable value)
-    N_tip = 10.0
-    N_tilt = 10.0
+    # 5. Anti-windup gains (back-calculation: Kb = Ki/Kp)
+    Kb_tip = tip_gains.Ki / tip_gains.Kp if tip_gains.Kp > 0 else 1.0
+    Kb_tilt = tilt_gains.Ki / tilt_gains.Kp if tilt_gains.Kp > 0 else 1.0
     
-    tip_gains = FsmPidGains(Kp=Kp_tip, Ki=Ki_tip, Kd=Kd_tip, N=N_tip)
-    tilt_gains = FsmPidGains(Kp=Kp_tilt, Ki=Ki_tilt, Kd=Kd_tilt, N=N_tilt)
+    # 6. Dynamically build the Notch Filter Configuration
+    notch_cfg = NotchFilterConfig(
+        enabled=True, 
+        f_center_hz=notch['f_center_hz'], 
+        zeta_zero=notch['zeta_zero'], 
+        zeta_pole=notch['zeta_pole']
+    )
     
-    # Anti-windup gains (typically 1/Ti where Ti = Kp/Ki)
-    Kb_tip = Ki_tip / Kp_tip if Kp_tip > 0 else 1.0
-    Kb_tilt = Ki_tilt / Kp_tilt if Kp_tilt > 0 else 1.0
-    
+    # 7. Final Controller Assembly
     config = FsmControllerConfig(
         tip_gains=tip_gains,
         tilt_gains=tilt_gains,
-        u_min=-2.0,
-        u_max=2.0,
+        notch_config=notch_cfg,
+        u_min=-50.0,  # Physical Amplifier Limits
+        u_max=50.0,
         Kb_tip=Kb_tip,
         Kb_tilt=Kb_tilt
     )
     
+    print(f"INFO: FSM Controller dynamically loaded from {json_path}")
+    print(f"      Design Bandwidth: {pidf['crossover_freq_hz']} Hz")
+    
     return FsmPidController(config)
-
-
 # ============================================================================
 # VALIDATION AND TESTING
 # ============================================================================

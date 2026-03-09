@@ -1,28 +1,29 @@
 #!/usr/bin/env python3
 """
-Fast Steering Mirror (FSM) Control Design
+Fast Steering Mirror (FSM) Control Design — PI S-330 Piezoelectric
 
-This script designs precision controllers for a 2-axis FSM driven by Voice Coil
-Actuators (VCA) for space laser communication applications. The FSM provides
-high-bandwidth fine pointing (100-200 Hz) to correct residual Line-of-Sight
-errors after coarse gimbal positioning.
+This script designs precision PIDF controllers for the Physik Instrumente
+S-330 Piezoelectric FSM used in the dual-stage free-space optical terminal.
+The PZT FSM provides high-bandwidth fine pointing (>300 Hz) to correct
+residual Line-of-Sight errors after coarse gimbal positioning.
 
-Key Challenges Addressed:
--------------------------
-1. MIMO (2-in, 2-out) coupling between Tip and Tilt axes
-2. Flexural resonances from mechanical structure
-3. Cross-axis coupling from asymmetric mass distribution
-4. High-frequency sensor noise from Quadrant Photo Detector (QPD)
+Plant Characteristics (PI S-330 PZT):
+-------------------------------------
+  • Stroke:        ±10 mrad
+  • 1st Resonance: f_n = 1 000 Hz
+  • Damping:       ζ = 0.02  (very lightly damped flexure)
+  • DC Sensitivity: 100 µrad/V
+  • Sensor:        Strain Gauge (SGS)
+  • Model Order:   2nd-order per axis, 4 states total (decoupled)
 
-System Model: 4th-order reduced-order state-space representation
 Control Objectives:
-    - Bandwidth: 100-200 Hz (closed-loop)
+    - Bandwidth: 200-400 Hz (closed-loop)
     - Phase Margin: ≥ 45° (robustness)
-    - Cross-talk: < 5% (axis decoupling)
+    - Damping augmentation for the lightly-damped 1 kHz resonance
     - Disturbance Rejection: > 40 dB at low frequencies
 
 Author: Senior Control Systems Engineer
-Date: January 20, 2026
+Date: March 1, 2026
 """
 
 # Set matplotlib backend BEFORE any imports
@@ -54,46 +55,42 @@ from dataclasses import dataclass, asdict
 
 def create_fsm_model() -> Tuple[signal.StateSpace, ctrl.StateSpace]:
     """
-    Create the 4th-order reduced-order FSM state-space model.
+    Create the PI S-330 PZT FSM state-space model.
     
-    This model captures:
-    - First two flexural resonances (structural modes)
-    - Cross-axis coupling from asymmetric inertia
-    - VCA actuator dynamics (first-order approximation)
+    Uses FsmDynamicsConfig.pi_s330() to build a physics-based 2nd-order
+    per-axis model (4 states total, decoupled tip/tilt).
+    
+    Plant transfer function per axis:
+        G(s) = K·ωn² / (s² + 2ζωn·s + ωn²)
+    
+    where K = 100e-6 rad/V, ωn = 2π·1000 rad/s, ζ = 0.02.
     
     Returns
     -------
     Tuple[signal.StateSpace, ctrl.StateSpace]
         SciPy and Python Control library representations
     """
-    # State Matrix (4x4) - captures structural resonances and damping
-    Ar = np.array([
-        [-20.02,   8.20,  125.75,    1.14],
-        [-8.16,  -19.92,    2.56, -146.84],
-        [-125.77, -3.40,  -30.63,    8.92],
-        [-0.88,   146.81,  -8.99,  -28.45]
-    ])
+    from lasercom_digital_twin.core.dynamics.fsm_dynamics import FsmDynamicsConfig
     
-    # Input Matrix (4x2) - VCA force to state mapping
-    Br = np.array([
-        [40.85, -43.10],
-        [-36.55, -38.03],
-        [42.42, -43.00],
-        [39.16, 36.67]
-    ])
+    # Build state-space from PI S-330 PZT vendor preset
+    config = FsmDynamicsConfig.pi_s330()
     
-    # Output Matrix (2x4) - state to Tip/Tilt angle mapping
-    Cr = np.array([
-        [38.68, -41.64, -37.43, -41.31],
-        [-45.05, -32.38, 47.41, -34.23]
-    ])
+    A = config.A
+    B = config.B
+    C = config.C
+    D = config.D
     
-    # Direct transmission (2x2) - no direct feed-through
-    Dr = np.zeros((2, 2))
+    # Print plant summary
+    info = config.get_info()
+    print(f"  Plant: {info['vendor']} ({info['type']})")
+    print(f"  Stroke: ±{info['stroke_mrad']:.1f} mrad")
+    print(f"  Resonance: f_n = {info['f_n_Hz']:.0f} Hz, ζ = {info['zeta']:.3f}")
+    print(f"  DC Sensitivity: {config.dc_sensitivity*1e6:.1f} µrad/V")
+    print(f"  State dimension: {info['n_states']}")
     
     # Create state-space models
-    sys_scipy = signal.StateSpace(Ar, Br, Cr, Dr)
-    sys_ctrl = ctrl.StateSpace(Ar, Br, Cr, Dr)
+    sys_scipy = signal.StateSpace(A, B, C, D)
+    sys_ctrl = ctrl.StateSpace(A, B, C, D)
     
     return sys_scipy, sys_ctrl
 
@@ -209,8 +206,8 @@ def plot_mimo_bode(sys_ctrl: ctrl.StateSpace, save_path: str = "fsm_bode_mimo.pn
     print("\n4. GENERATING MIMO BODE PLOTS")
     print("-" * 70)
     
-    # Frequency range: 0.1 Hz to 1 kHz
-    omega = np.logspace(-1, 3, 1000) * 2 * np.pi
+    # Frequency range: 0.1 Hz to 10 kHz (covers 1 kHz PZT resonance)
+    omega = np.logspace(-1, 4, 1000) * 2 * np.pi
     
     # Compute frequency response
     mag = np.zeros((2, 2, len(omega)))
@@ -401,102 +398,144 @@ def design_pi_controller(sys_ctrl: ctrl.StateSpace,
 
 
 def design_pidf_controller(sys_ctrl: ctrl.StateSpace,
-                          target_bandwidth_hz: float = 150.0) -> PIDFControllerGains:
+                           target_bandwidth_hz: float = 300.0,
+                           plant_resonance_hz: float = 1000.0) -> PIDFControllerGains:
     """
-    Design PIDF controller with derivative filtering for noise attenuation.
-    
-    Design Strategy:
-    ---------------
-    1. Start with PI gains from baseline design
-    2. Add derivative action for phase lead and damping
-    3. Filter derivative term (N ≈ 10-20) to avoid noise amplification
-    4. QPD sensor noise dominates above 500 Hz
-    
-    Parameters
-    ----------
-    sys_ctrl : ctrl.StateSpace
-        FSM plant model
-    target_bandwidth_hz : float
-        Desired closed-loop bandwidth [Hz]
-        
-    Returns
-    -------
-    PIDFControllerGains
-        Tuned PIDF gains with filtering
+    Design PIDF controller with a structural Notch filter and EXACT stability margins.
     """
-    print("\n6. DESIGNING PIDF CONTROLLER (High Performance)")
+    print("\n6. DESIGNING PIDF+NOTCH CONTROLLER (High Performance)")
     print("-" * 70)
     
     omega_c = 2 * np.pi * target_bandwidth_hz
     
-    # Start with PI design
-    sys_tip = ctrl.ss(sys_ctrl.A, sys_ctrl.B[:, 0:1], 
-                     sys_ctrl.C[0:1, :], sys_ctrl.D[0:1, 0:1])
-    sys_tilt = ctrl.ss(sys_ctrl.A, sys_ctrl.B[:, 1:2], 
-                      sys_ctrl.C[1:2, :], sys_ctrl.D[1:2, 1:2])
+    # Extract SISO plants
+    sys_tip = ctrl.ss(sys_ctrl.A, sys_ctrl.B[:, 0:1], sys_ctrl.C[0:1, :], sys_ctrl.D[0:1, 0:1])
+    sys_tilt = ctrl.ss(sys_ctrl.A, sys_ctrl.B[:, 1:2], sys_ctrl.C[1:2, :], sys_ctrl.D[1:2, 1:2])
     
-    omega_i = omega_c / 10.0
+    # 1. Create the Notch Filter to kill the 1 kHz peak
+    notch_tf = design_notch_filter(f_center_hz=plant_resonance_hz, depth=0.01, width=0.2)
     
-    # Base PI gains
-    mag_tip, phase_tip, _ = ctrl.bode(sys_tip, [omega_c], plot=False)
-    mag_tilt, phase_tilt, _ = ctrl.bode(sys_tilt, [omega_c], plot=False)
+    # Absorb the notch filter into the plant for tuning purposes
+    sys_tip_notched = sys_tip * notch_tf
+    sys_tilt_notched = sys_tilt * notch_tf
     
-    Kp_tip = 1.0 / mag_tip[0]
-    Kp_tilt = 1.0 / mag_tilt[0]
-    Ki_tip = Kp_tip * omega_i
-    Ki_tilt = Kp_tilt * omega_i
+    # 2. Base PI Tuning on the NOTCHED plant
+    omega_i = omega_c / 1.5  # Slightly more aggressive integration
+  # 2. Integrator-Dominant Tuning (The Fix for the Flat-Plant Paradox)
+    # The plant is a flat gain (10^-4) up to 1000 Hz. 
+    # To roll off exactly at omega_c (-20 dB/dec), Ki MUST dictate the crossover.
+    mag_tip, phase_tip, _ = ctrl.bode(sys_tip_notched, [omega_c], plot=False)
+    mag_tilt, phase_tilt, _ = ctrl.bode(sys_tilt_notched, [omega_c], plot=False)
     
-    # Derivative gains for phase lead
-    # Kd chosen to add ~15-20° phase lead at crossover
-    # Filtered derivative: Kd*s / (1 + s/N*omega_c)
-    N = 15.0  # Filter coefficient (typical: 10-20)
+    plant_gain_at_wc = mag_tip[0]  # approx 100e-6
     
-    # Derivative gain: Kd = Kp / (N * omega_c) tuned for phase lead
-    Kd_tip = Kp_tip / (2.0 * omega_c)
-    Kd_tilt = Kp_tilt / (2.0 * omega_c)
+    # Set Integrator to cross 0 dB exactly at omega_c
+    Ki_tip = omega_c / plant_gain_at_wc
+    Ki_tilt = omega_c / plant_gain_at_wc
     
-    # Compute approximate phase margin with PID
-    phase_boost_i = np.arctan(omega_c / omega_i) * 180 / np.pi
-    phase_boost_d = np.arctan(Kd_tip * omega_c / Kp_tip) * 180 / np.pi
-    phase_margin_tip = 180 + phase_tip[0] * 180 / np.pi + phase_boost_i + phase_boost_d
-    phase_margin_tilt = 180 + phase_tilt[0] * 180 / np.pi + phase_boost_i + phase_boost_d
-    phase_margin_avg = (phase_margin_tip + phase_margin_tilt) / 2
+    # Drop Proportional gain to -20 dB (10% of plant inverse) so it doesn't 
+    # flatten the high-frequency response. This guarantees stability.
+    Kp_tip = 0.1 / plant_gain_at_wc
+    Kp_tilt = 0.1 / plant_gain_at_wc
+    
+    # 3. Derivative Tuning 
+    # Disabled to prevent QPD handover shock. Notch filter handles resonance.
+    N = 10.0  
+    Kd_tip = 0.0  
+    Kd_tilt = 0.0
+    
+    # 4. Construct EXACT Controller Transfer Functions
+    N_omega = N * omega_c
+    num_pid_tip = [Kp_tip + Kd_tip * N_omega, Kp_tip * N_omega + Ki_tip, Ki_tip * N_omega]
+    den_pid = [1, N_omega, 0]
+    C_pid_tip = ctrl.tf(num_pid_tip, den_pid)
+    
+    num_pid_tilt = [Kp_tilt + Kd_tilt * N_omega, Kp_tilt * N_omega + Ki_tilt, Ki_tilt * N_omega]
+    C_pid_tilt = ctrl.tf(num_pid_tilt, den_pid)
+    
+    # Total Open-Loop L(s) = C_pid(s) * G_notch(s) * G_plant(s)
+    L_tip = C_pid_tip * notch_tf * sys_tip
+    L_tilt = C_pid_tilt * notch_tf * sys_tilt
+    
+    # 5. Calculate EXACT Stability Margins
+    gm_tip, pm_tip, wg_tip, wp_tip = ctrl.margin(L_tip)
+    gm_tilt, pm_tilt, wg_tilt, wp_tilt = ctrl.margin(L_tilt)
+    
+    # Convert Gain Margin to dB
+    gm_tip_db = 20 * np.log10(gm_tip) if gm_tip != float('inf') else float('inf')
+    gm_tilt_db = 20 * np.log10(gm_tilt) if gm_tilt != float('inf') else float('inf')
+    
+    # EXACT VARIABLES NEEDED FOR THE RETURN BLOCK
+    pm_avg = (pm_tip + pm_tilt) / 2
+    gm_db_avg = (gm_tip_db + gm_tilt_db) / 2
     
     print(f"  Target Bandwidth:     {target_bandwidth_hz:.1f} Hz")
-    print(f"  Integral Frequency:   {omega_i / (2*np.pi):.1f} Hz")
-    print(f"  Derivative Filter N:  {N:.1f}")
-    print(f"\n  TIP AXIS GAINS:")
-    print(f"    Kp = {Kp_tip:.4f}")
-    print(f"    Ki = {Ki_tip:.4f}")
-    print(f"    Kd = {Kd_tip:.6f}")
-    print(f"    Phase Margin ≈ {phase_margin_tip:.1f}°")
-    print(f"\n  TILT AXIS GAINS:")
-    print(f"    Kp = {Kp_tilt:.4f}")
-    print(f"    Ki = {Ki_tilt:.4f}")
-    print(f"    Kd = {Kd_tilt:.6f}")
-    print(f"    Phase Margin ≈ {phase_margin_tilt:.1f}°")
+    print(f"  Notch Filter Active:  {plant_resonance_hz:.1f} Hz")
+    print(f"\n  EXACT STABILITY MARGINS:")
+    print(f"    Phase Margin:       {pm_tip:.1f}° at {wp_tip/(2*np.pi):.1f} Hz")
+    print(f"    Gain Margin:        {gm_tip_db:.1f} dB at {wg_tip/(2*np.pi):.1f} Hz")
     
-    if phase_margin_avg >= 45.0:
-        print(f"\n  ✓ Phase margin {phase_margin_avg:.1f}° meets 45° requirement")
+    if pm_avg >= 45.0 and gm_db_avg >= 6.0:
+        print(f"\n  ✓ System Robustly Stable (PM > 45°, GM > 6dB)")
     else:
-        print(f"\n  ⚠ Phase margin {phase_margin_avg:.1f}° below 45° (reduce bandwidth)")
+        print(f"\n  ⚠ MARGIN VIOLATION: Risk of high-frequency oscillation.")
     
+    # Create the notch configuration object
+    notch_config = NotchFilterGains(f_center_hz=plant_resonance_hz, zeta_zero=0.005, zeta_pole=0.707)
+    
+    # Return all variables correctly
     gains = PIDFControllerGains(
-        Kp_tip=Kp_tip,
-        Ki_tip=Ki_tip,
+        Kp_tip=Kp_tip, 
+        Ki_tip=Ki_tip, 
         Kd_tip=Kd_tip,
-        Kp_tilt=Kp_tilt,
-        Ki_tilt=Ki_tilt,
+        Kp_tilt=Kp_tilt, 
+        Ki_tilt=Ki_tilt, 
         Kd_tilt=Kd_tilt,
-        N_tip=N,
-        N_tilt=N,
+        N_tip=N, 
+        N_tilt=N, 
+        notch=notch_config,
         crossover_freq_hz=target_bandwidth_hz,
-        phase_margin_deg=phase_margin_avg
+        phase_margin_deg=pm_avg, 
+        gain_margin_db=gm_db_avg
     )
     
     return gains
 
 
+@dataclass
+class NotchFilterGains:
+    """Notch filter parameters to suppress mechanical resonance."""
+    f_center_hz: float
+    zeta_zero: float  # Depth of the notch (e.g., 0.001)
+    zeta_pole: float  # Width of the notch (e.g., 0.15)
+
+
+@dataclass
+class PIDFControllerGains:
+    """PIDF controller gains with derivative filtering and Notch."""
+    Kp_tip: float
+    Ki_tip: float
+    Kd_tip: float
+    Kp_tilt: float
+    Ki_tilt: float
+    Kd_tilt: float
+    N_tip: float 
+    N_tilt: float
+    notch: NotchFilterGains  # ADDED: Notch filter configuration
+    crossover_freq_hz: float
+    phase_margin_deg: float
+    gain_margin_db: float    # ADDED: Gain margin tracking
+
+
+def design_notch_filter(f_center_hz: float, depth: float = 0.01, width: float = 0.2) -> ctrl.TransferFunction:
+    """
+    Creates a continuous-time Notch Filter transfer function.
+    G_notch(s) = (s^2 + 2*depth*wn*s + wn^2) / (s^2 + 2*width*wn*s + wn^2)
+    """
+    wn = 2 * np.pi * f_center_hz
+    num = [1.0, 2 * depth * wn, wn**2]
+    den = [1.0, 2 * width * wn, wn**2]
+    return ctrl.tf(num, den)
 # ============================================================================
 # CLOSED-LOOP SIMULATION
 # ============================================================================
@@ -524,37 +563,39 @@ def simulate_closed_loop_step(sys_ctrl: ctrl.StateSpace,
     print("\n7. CLOSED-LOOP STEP RESPONSE SIMULATION")
     print("-" * 70)
     
-    # Create PIDF transfer functions for each axis
-    # PIDF(s) = Kp + Ki/s + Kd*N*s/(s + N*omega_c)
     omega_c = 2 * np.pi * gains.crossover_freq_hz
     N_omega_tip = gains.N_tip * omega_c
     N_omega_tilt = gains.N_tilt * omega_c
     
-    # Tip axis PIDF
-    num_tip = [gains.Kd_tip * N_omega_tip, 
-               gains.Kp_tip * N_omega_tip + gains.Kd_tip * N_omega_tip * gains.Ki_tip / gains.Kp_tip,
+    # 1. Build Tip axis PIDF
+    num_tip = [gains.Kp_tip + gains.Kd_tip * N_omega_tip, 
+               gains.Kp_tip * N_omega_tip + gains.Ki_tip,
                gains.Ki_tip * N_omega_tip]
     den_tip = [1, N_omega_tip, 0]
     C_tip = ctrl.tf(num_tip, den_tip)
     
-    # Tilt axis PIDF
-    num_tilt = [gains.Kd_tilt * N_omega_tilt,
-                gains.Kp_tilt * N_omega_tilt + gains.Kd_tilt * N_omega_tilt * gains.Ki_tilt / gains.Kp_tilt,
+    # 2. Build Tilt axis PIDF
+    num_tilt = [gains.Kp_tilt + gains.Kd_tilt * N_omega_tilt,
+                gains.Kp_tilt * N_omega_tilt + gains.Ki_tilt,
                 gains.Ki_tilt * N_omega_tilt]
     den_tilt = [1, N_omega_tilt, 0]
     C_tilt = ctrl.tf(num_tilt, den_tilt)
     
-    # For MIMO system, use decentralized control (2x2 diagonal controller)
-    # Extract SISO systems for each axis
-    sys_tip = ctrl.ss(sys_ctrl.A, sys_ctrl.B[:, 0:1], 
-                     sys_ctrl.C[0:1, :], sys_ctrl.D[0:1, 0:1])
-    sys_tilt = ctrl.ss(sys_ctrl.A, sys_ctrl.B[:, 1:2], 
-                      sys_ctrl.C[1:2, :], sys_ctrl.D[1:2, 1:2])
+    # 3. Build the Notch Filter from the gains object
+    wn = 2 * np.pi * gains.notch.f_center_hz
+    num_notch = [1.0, 2 * gains.notch.zeta_zero * wn, wn**2]
+    den_notch = [1.0, 2 * gains.notch.zeta_pole * wn, wn**2]
+    notch_tf = ctrl.tf(num_notch, den_notch)
     
-    # Closed-loop systems
+    # Extract SISO systems for each axis
+    sys_tip = ctrl.ss(sys_ctrl.A, sys_ctrl.B[:, 0:1], sys_ctrl.C[0:1, :], sys_ctrl.D[0:1, 0:1])
+    sys_tilt = ctrl.ss(sys_ctrl.A, sys_ctrl.B[:, 1:2], sys_ctrl.C[1:2, :], sys_ctrl.D[1:2, 1:2])
+    
+    # 4. Form Closed-Loop systems WITH THE NOTCH FILTER IN THE FORWARD PATH
     try:
-        CL_tip = ctrl.feedback(C_tip * sys_tip)
-        CL_tilt = ctrl.feedback(C_tilt * sys_tilt)
+        # L(s) = C_pid(s) * G_notch(s) * G_plant(s)
+        CL_tip = ctrl.feedback(C_tip * notch_tf * sys_tip)
+        CL_tilt = ctrl.feedback(C_tilt * notch_tf * sys_tilt)
     except Exception as e:
         print(f"  ⚠ Error forming closed-loop system: {e}")
         return {}
@@ -749,6 +790,59 @@ def plot_step_responses(sim_results: Dict, save_path: str = "fsm_step_response.p
     print(f"\n  ✓ Step response plot saved as '{save_path}'")
 
 
+def plot_root_locus(sys_ctrl: ctrl.StateSpace, gains: PIDFControllerGains, save_path: str = "fsm_root_locus.png"):
+    """Plot the Root Locus of the system with the designed closed-loop poles marked."""
+    print("\n10. PLOTTING ROOT LOCUS AND CLOSED-LOOP POLES")
+    print("-" * 70)
+    
+    omega_c = 2 * np.pi * gains.crossover_freq_hz
+    N_omega_tip = gains.N_tip * omega_c
+    
+    num_tip = [gains.Kp_tip + gains.Kd_tip * N_omega_tip, 
+               gains.Kp_tip * N_omega_tip + gains.Ki_tip,
+               gains.Ki_tip * N_omega_tip]
+    den_tip = [1, N_omega_tip, 0]
+    C_tip = ctrl.tf(num_tip, den_tip)
+    
+    wn = 2 * np.pi * gains.notch.f_center_hz
+    num_notch = [1.0, 2 * gains.notch.zeta_zero * wn, wn**2]
+    den_notch = [1.0, 2 * gains.notch.zeta_pole * wn, wn**2]
+    notch_tf = ctrl.tf(num_notch, den_notch)
+    
+    sys_tip = ctrl.ss(sys_ctrl.A, sys_ctrl.B[:, 0:1], sys_ctrl.C[0:1, :], sys_ctrl.D[0:1, 0:1])
+    
+    # We plot root locus of the open loop system parameter L
+    L = C_tip * notch_tf * sys_tip
+    CL = ctrl.feedback(L)
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    try:
+        ctrl.root_locus(L, ax=ax, grid=True)
+    except AttributeError:
+        ctrl.rlocus(L, Plot=True)
+        ax = plt.gca()
+        
+    try:
+        cl_poles = ctrl.poles(CL)
+        ax.plot(np.real(cl_poles), np.imag(cl_poles), 'r*', markersize=12, label='Closed-Loop Poles')
+        
+        cl_zeros = ctrl.zeros(CL)
+        if len(cl_zeros) > 0:
+            ax.plot(np.real(cl_zeros), np.imag(cl_zeros), 'bo', markersize=8, fillstyle='none', label='Closed-Loop Zeros')
+            
+    except Exception as e:
+        print(f"  ⚠ Error plotting poles/zeros: {e}")
+        
+    ax.set_title('Root Locus with Final Closed-Loop Poles & Zeros', fontsize=14, fontweight='bold')
+    ax.legend(loc='best')
+    ax.set_xlim([-4000, 1000])
+    ax.set_ylim([-8000, 8000])
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"  ✓ Root Locus plot saved as '{save_path}'")
+
+
 # ============================================================================
 # EXPORT CONFIGURATION
 # ============================================================================
@@ -796,19 +890,154 @@ def export_gains_json(pi_gains: PIControllerGains,
 # MAIN EXECUTION
 # ============================================================================
 
+def design_pid_root_locus_interactive(sys_ctrl: ctrl.StateSpace,
+                                      target_bandwidth_hz: float = 150.0,
+                                      plant_resonance_hz: float = 1000.0) -> PIDFControllerGains:
+    """
+    Design PID controller using interactive Root Locus technique.
+    The user visually selects a closed-loop pole to determine the gain.
+    """
+    print("\n9. DESIGNING PID CONTROLLER VIA ROOT LOCUS (Interactive)")
+    print("-" * 70)
+    
+    import matplotlib
+    original_backend = matplotlib.get_backend()
+    try:
+        if original_backend.lower() == 'agg':
+            plt.switch_backend('TkAgg') # Switch to interactive backend
+    except Exception as e:
+        print(f"Warning: Could not switch to interactive backend: {e}")
+        
+    omega_c = 2 * np.pi * target_bandwidth_hz
+    N = 15.0
+    N_omega = N * omega_c
+    
+    # Extract SISO tip plant
+    sys_tip = ctrl.ss(sys_ctrl.A, sys_ctrl.B[:, 0:1], sys_ctrl.C[0:1, :], sys_ctrl.D[0:1, 0:1])
+    
+    # Notch filter (to cancel the 1000 Hz resonance before root locus)
+    notch_config = NotchFilterGains(f_center_hz=plant_resonance_hz, zeta_zero=0.005, zeta_pole=0.707)
+    notch_tf = design_notch_filter(f_center_hz=notch_config.f_center_hz, 
+                                   depth=notch_config.zeta_zero, width=notch_config.zeta_pole)
+    
+    # We construct a base proper PIDF transfer function for the root locus
+    # C_base(s) = (N_omega s^2 + 2z N_omega s + z^2 N_omega) / (s^2 + s N_omega)
+    # where z = omega_c
+    z = omega_c
+    num_c_base = [N_omega, 2 * z * N_omega, (z**2) * N_omega]
+    den_c_base = [1.0, N_omega, 0.0]
+    C_base = ctrl.tf(num_c_base, den_c_base)
+    
+    L_base = C_base * notch_tf * sys_tip
+    
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    try:
+        ctrl.root_locus(L_base, ax=ax, grid=True)
+    except AttributeError:
+        ctrl.rlocus(L_base, Plot=True)
+        ax = plt.gca()
+        
+    ax.set_title("Interactive Root Locus PID Design\nCLICK ON THE LOCUS TO SELECT CLOSED-LOOP POLE!", 
+                 fontsize=14, fontweight='bold')
+    ax.set_xlim([-4000, 1000])
+    ax.set_ylim([-4000, 4000])
+    
+    print(">>> ACTION REQUIRED: A Plot has opened. Please CLICK on the Root Locus to select a pole.")
+    plt.tight_layout()
+    try:
+        pts = plt.ginput(1, timeout=0)
+    except Exception as e:
+        print(f"Interactive selection failed or window closed: {e}")
+        pts = []
+        
+    plt.close(fig)
+    
+    try:
+        if original_backend.lower() == 'agg':
+            plt.switch_backend(original_backend)
+    except Exception:
+        pass
+        
+    if not pts:
+        print("No point selected. Using default Root Locus gain K = 1.0.")
+        K = 1.0
+    else:
+        px, py = pts[0]
+        s_selected = complex(px, py)
+        print(f"Selected point: {s_selected:.2f}")
+        
+        # Calculate gain K to reach this point
+        try:
+            val = L_base(s_selected)
+            if isinstance(val, (np.ndarray, list)):
+                val = val[0][0]
+            L_mag = abs(val)
+            K = 1.0 / L_mag if L_mag > 1e-12 else 1.0
+        except Exception:
+            K = 1.0
+            
+        print(f"Calculated Root Locus Gain: K = {K:.4f}")
+    
+    # Map K * C_base back to standard PIDF exact gains
+    # Kp + Kd*N_omega = K * N_omega  => Kd = K - Kp/N_omega
+    # Kp*N_omega + Ki = 2 * K * z * N_omega
+    # Ki * N_omega = K * z^2 * N_omega  => Ki = K * z^2
+    Ki_tip = K * (z**2)
+    Kp_tip = 2 * K * z - Ki_tip / N_omega
+    Kd_tip = K - Kp_tip / N_omega
+    
+    # Verify bounds
+    Kp_tip = max(0.0, Kp_tip)
+    Kd_tip = max(0.0, Kd_tip)
+    
+    # Equal mapping for tilt
+    Kp_tilt, Ki_tilt, Kd_tilt = Kp_tip, Ki_tip, Kd_tip
+    
+    # Build actual controller to evaluate margins
+    num_pid = [Kp_tip + Kd_tip * N_omega, Kp_tip * N_omega + Ki_tip, Ki_tip * N_omega]
+    den_pid = [1, N_omega, 0]
+    C_pid_tip = ctrl.tf(num_pid, den_pid)
+    
+    L_actual = C_pid_tip * notch_tf * sys_tip
+    gm, pm, wg, wp = ctrl.margin(L_actual)
+    gm_db = 20 * np.log10(gm) if gm > 0 and gm != float('inf') else float('inf')
+    
+    print(f"\nROOT LOCUS DESIGN RESULTS:")
+    print(f"  Kp: {Kp_tip:.4f}")
+    print(f"  Ki: {Ki_tip:.4f}")
+    print(f"  Kd: {Kd_tip:.4f}")
+    print(f"  Phase Margin: {pm:.1f}°")
+    print(f"  Gain Margin:  {gm_db:.1f} dB")
+    
+    gains = PIDFControllerGains(
+        Kp_tip=Kp_tip, Ki_tip=Ki_tip, Kd_tip=Kd_tip,
+        Kp_tilt=Kp_tilt, Ki_tilt=Ki_tilt, Kd_tilt=Kd_tilt,
+        N_tip=N, N_tilt=N, notch=notch_config,
+        crossover_freq_hz=target_bandwidth_hz,
+        phase_margin_deg=pm, gain_margin_db=gm_db
+    )
+    return gains
+
+
 def main():
-    """Main execution function."""
+    import argparse
+    parser = argparse.ArgumentParser(description='FSM Control Design')
+    parser.add_argument('--show', action='store_true', help='Show plots interactively')
+    parser.add_argument('--rlocus', action='store_true', help='Run Interactive Root Locus GUI')
+    args, unknown = parser.parse_known_args()
+    
     print("\n")
     print("=" * 70)
     print(" FAST STEERING MIRROR (FSM) CONTROL DESIGN ")
-    print(" 2-Axis MIMO System with Voice Coil Actuators ")
+    print(" PI S-330 Piezoelectric (PZT) — 2-Axis Decoupled ")
     print("=" * 70)
     print("\nObjective: High-bandwidth precision pointing for laser communication")
-    print("Target:    100-200 Hz bandwidth, 45° phase margin, <5% cross-talk\n")
+    print("Target:    200-400 Hz bandwidth, 45° phase margin\n")
     
     # 1. Create system model
     sys_scipy, sys_ctrl = create_fsm_model()
-    print("✓ 4th-order FSM state-space model created (2-in, 2-out MIMO)")
+    print("✓ PZT state-space model created (2-in, 2-out, decoupled)")
     
     # 2. System characterization
     characteristics = analyze_system_characteristics(sys_ctrl)
@@ -820,7 +1049,13 @@ def main():
     pi_gains = design_pi_controller(sys_ctrl, target_bandwidth_hz=150.0)
     
     # 5. Design PIDF controller (high performance)
-    pidf_gains = design_pidf_controller(sys_ctrl, target_bandwidth_hz=150.0)
+    pidf_gains = design_pidf_controller(sys_ctrl, target_bandwidth_hz=150.0, plant_resonance_hz=1000.0)
+    
+    # Interactive Root Locus Method
+    if args.rlocus:
+        pidf_gains = design_pid_root_locus_interactive(sys_ctrl, target_bandwidth_hz=150.0, plant_resonance_hz=1000.0)
+    else:
+        print("\nNote: You can run interactive Root Locus PID design by passing '--rlocus' argument.")
     
     # 6. Closed-loop simulation
     sim_results = simulate_closed_loop_step(sys_ctrl, pidf_gains, duration=0.1)
@@ -831,6 +1066,9 @@ def main():
     # 8. Plot results
     if sim_results:
         plot_step_responses(sim_results)
+        
+    # Plot root locus showing final closed loop poles/zeros
+    plot_root_locus(sys_ctrl, pidf_gains)
     
     # 9. Export gains
     export_gains_json(pi_gains, pidf_gains)
@@ -849,17 +1087,15 @@ def main():
     print("\n✓ FSM control design completed successfully!")
     print("=" * 70 + "\n")
     
-    # Only show plots interactively if explicitly requested
-    # (useful for interactive environments like Jupyter)
-    if len(sys.argv) > 1 and sys.argv[1] == '--show':
+    if args.show:
         try:
+            import matplotlib.pyplot as plt
             plt.show()
         except Exception as e:
             print(f"Warning: Could not display plots interactively: {e}")
             print("Plots have been saved to PNG files.")
     else:
         print("Plots saved to PNG files. Use '--show' argument to display interactively.")
-
 
 if __name__ == "__main__":
     main()

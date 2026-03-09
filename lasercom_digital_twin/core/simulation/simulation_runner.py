@@ -33,7 +33,6 @@ import threading
 
 # Import all subsystem components
 from lasercom_digital_twin.core.actuators.motor_models import GimbalMotorModel
-from lasercom_digital_twin.core.actuators.fsm_actuator import FSMActuatorModel
 from lasercom_digital_twin.core.sensors.sensor_models import AbsoluteEncoder, RateGyro
 from lasercom_digital_twin.core.sensors.quadrant_detector import QuadrantDetector
 from lasercom_digital_twin.core.estimators.state_estimator import PointingStateEstimator
@@ -46,11 +45,13 @@ from lasercom_digital_twin.core.optics.optical_chain import TelescopeOptics, Foc
 from lasercom_digital_twin.core.coordinate_frames.transformations import OpticalFrameCompensator
 from lasercom_digital_twin.core.dynamics.gimbal_dynamics import GimbalDynamics
 
-# High-fidelity FSM state-space model (4th-order)
+# High-fidelity FSM state-space model (vendor-parameterised)
 from lasercom_digital_twin.core.dynamics.fsm_dynamics import (
     FsmDynamics, 
     FsmDynamicsConfig,
-    create_fsm_dynamics_from_design
+    FSMActuationType,
+    create_fsm_from_vendor,
+    create_fsm_dynamics_from_design,
 )
 from lasercom_digital_twin.core.controllers.fsm_pid_control import (
     FsmPidController,
@@ -76,11 +77,11 @@ class SimulationConfig:
     
     # Timing
     dt_sim: float = 0.001          # MuJoCo timestep [s] (1 ms)
-    dt_fine: float = 0.001         # FSM control rate [s] (1 ms)
+    dt_fine: float = 0.0001        # FSM control rate [s] (0.1 ms = 10 kHz, matches gains design)
     dt_coarse: float = 0.010       # Coarse control rate [s] (10 ms)
     dt_encoder: float = 0.001      # Encoder sample rate [s] (1 ms)
     dt_gyro: float = 0.001         # Gyro sample rate [s] (1 ms)
-    dt_qpd: float = 0.001          # QPD sample rate [s] (1 ms)
+    dt_qpd: float = 0.0001         # QPD sample rate [s] (0.1 ms = 10 kHz, matches dt_fine)
     log_period: float = 0.001      # Data logging rate [s] (1 ms)
     
     # Visualization and execution
@@ -222,8 +223,19 @@ class SimulationState:
     est_el_dot: float = 0.0        # Estimated elevation rate [rad/s]
     
     # Performance metrics
-    los_error_x: float = 0.0       # True LOS error X (tip) [rad]
-    los_error_y: float = 0.0       # True LOS error Y (tilt) [rad]
+    los_error_x: float = 0.0       # True LOS error X (tip) [rad] — pre-FSM correction
+    los_error_y: float = 0.0       # True LOS error Y (tilt) [rad] — pre-FSM correction
+    
+    # FSM Residual: actual post-correction pointing error seen by QPD (the true performance metric)
+    fsm_residual_error_x: float = 0.0   # Residual LOS error X after FSM correction [rad]
+    fsm_residual_error_y: float = 0.0   # Residual LOS error Y after FSM correction [rad]
+    
+    # FSM PID internal decomposition (for limit-cycle diagnosis)
+    fsm_pid_p_tip: float = 0.0     # Proportional term [V]
+    fsm_pid_i_tip: float = 0.0     # Integral accumulator [V]
+    fsm_pid_p_tilt: float = 0.0    # Proportional term [V]
+    fsm_pid_i_tilt: float = 0.0    # Integral accumulator [V]
+    
     fsm_saturated: bool = False    # FSM saturation flag
 
     # NDOB (Nonlinear Disturbance Observer) estimates
@@ -466,33 +478,31 @@ class DigitalTwinRunner:
         self._motor_Kt = float(motor_config.get('K_t', 0.1))
         self._motor_Ke = float(motor_config.get('K_e', 0.1))
         
-        # Fast Steering Mirror - High-Fidelity State-Space Model
-        # Option 1: Use factory function (recommended)
-        self.fsm_dynamics = create_fsm_dynamics_from_design()
+        # =============================================================
+        # Fast Steering Mirror — Vendor-Parameterised State-Space Model
+        # =============================================================
+        # Select the FSM vendor by setting 'vendor' in fsm_config:
+        #
+        #   fsm_config = {'vendor': 'pi'}       → PI S-330       (PZT,        ±10 mrad, 1000 Hz, ζ=0.02, 4-state)
+        #   fsm_config = {'vendor': 'newport'}  → Newport FSM-300 (VCA,       ±26 mrad,  140 Hz, ζ=0.15, 6-state)
+        #   fsm_config = {'vendor': 'cedrat'}   → CEDRAT M-FSM45  (Reluctance, ±25 mrad, 100 Hz, ζ=0.08, 4-state)
+        #
+        # Example (in SimulationConfig):
+        #   config = SimulationConfig(fsm_config={'vendor': 'newport'}, ...)
+        #
+        # Default: 'pi' (Physik Instrumente S-330, Piezoelectric)
+        fsm_vendor = (self.config.fsm_config or {}).get('vendor', 'pi')
+        self.fsm_dynamics = create_fsm_from_vendor(fsm_vendor)
         
-        # Option 2: Manual configuration (if custom matrices needed)
-        # fsm_config_ss = self.config.fsm_config or {}
-        # if 'A' in fsm_config_ss:
-        #     config = FsmDynamicsConfig(
-        #         A=np.array(fsm_config_ss['A']),
-        #         B=np.array(fsm_config_ss['B']),
-        #         C=np.array(fsm_config_ss['C']),
-        #         D=np.array(fsm_config_ss['D'])
-        #     )
-        #     self.fsm_dynamics = FsmDynamics(config)
+        # Cache FSM config info for logging
+        fsm_info = self.fsm_dynamics.config.get_info()
+        self._fsm_n_states = self.fsm_dynamics.n_states
+        self._fsm_theta_max = self.fsm_dynamics.theta_max
         
-        # Legacy FSM actuator (kept for backward compatibility with old tests)
-        fsm_config_legacy = self.config.fsm_config or {
-            'natural_frequency': 500.0,
-            'damping_ratio': 0.7,
-            'max_angle': 0.01,
-            'hysteresis_amplitude': 5e-5,
-            'max_rate': 1.0,
-            'seed': self.config.seed + 1
-        }
-        self.fsm = FSMActuatorModel(fsm_config_legacy)
-        
-        print("INFO: FSM initialized with 4th-order state-space dynamics (RK4 integration)")
+        print(f"INFO: FSM initialized — {fsm_info['vendor']} ({fsm_info['type']}), "
+              f"±{fsm_info['stroke_mrad']:.1f} mrad stroke, "
+              f"f_n={fsm_info['f_n_Hz']:.0f} Hz, ζ={fsm_info['zeta']:.3f}, "
+              f"{fsm_info['n_states']}-state model")
     
     def _init_sensors(self) -> None:
         """Initialize all sensor models."""
@@ -537,14 +547,35 @@ class DigitalTwinRunner:
         """Initialize optical chain and coordinate transformations."""
         # Telescope optics
         optics_config = self.config.optics_config or {
-            'focal_length_m': 1.5,
-            'aperture_diameter_m': 0.3,
-            'wavelength_m': 1550e-9,
-            'detector_size_um': 1000.0
+            'focal_length_m': 0.20,         # 200 mm (Short barrel for low moment of inertia)
+            'aperture_diameter_m': 0.05,    # 50 mm (2-inch clear aperture)
+            'wavelength_m': 1550e-9,        # 1550 nm (Telecom/Eye-safe standard)
+            'detector_size_um': 1000.0      # 1 mm x 1 mm InGaAs QPD
+        }
+        self.optics = TelescopeOptics(optics_config)
+        # Quadrant Photo Detector (Mathematically coupled to the new optics)
+        qpd_config = self.config.qpd_config or {
+            'sensitivity': 2000.0,
+            
+            # Linear range = Spot Size / Focal Length
+            # 100 µm / 0.2 m = 0.0005 rad (500 µrad)
+            'linear_range': 500e-6, 
+            
+            # Smaller aperture = fewer photons = slightly higher noise floor.
+            # 0.5 µrad (500 nrad) RMS is realistic for a 50mm terrestrial link.
+            'noise_std': 5e-7,     
+            
+            'bias_x': 0.0,
+            'bias_y': 0.0,
+            'nonlinearity_coeff': 100.0,
+            
+            # Spot intentionally defocused to 100 µm to provide a wide 500 µrad 
+            # linear capture range, allowing the FSM to easily catch the beam.
+            'spot_size_um': 100.0,  
+            'seed': self.config.seed + 6
         }
         
-        self.optics = TelescopeOptics(optics_config)
-        
+        self.qpd = QuadrantDetector(qpd_config)
         # Optical frame compensator
         frame_config = self.config.frame_config or {
             'site_latitude_deg': 35.0,
@@ -650,22 +681,27 @@ class DigitalTwinRunner:
             # New PIDF controller with derivative filtering and anti-windup
             # Load tuned gains from FSM_control_design.py or use defaults
             bandwidth_hz = self.config.fsm_controller_config.get('bandwidth_hz', 150.0) if self.config.fsm_controller_config else 150.0
-            self.fsm_pid = create_fsm_controller_from_design(bandwidth_hz=bandwidth_hz) # Factory function to create object of NonlinearDisturbanceObserver:
+            #self.fsm_pid = create_fsm_controller_from_design(bandwidth_hz=bandwidth_hz) # Factory function to create object of NonlinearDisturbanceObserver:
+            json_file_path = "fsm_controller_gains.json" 
+            self.fsm_pid = create_fsm_controller_from_design(json_path=json_file_path)
             print(f"INFO: FSM PIDF controller initialized (Bandwidth: {bandwidth_hz:.0f} Hz)")
         else:
             # Legacy FSM controller for backward compatibility
             self.fsm_pid = None
         
         # Legacy FSM controller (kept for backward compatibility)
-        fsm_controller_config = self.config.fsm_controller_config or {
-            'kp_tip': 0.976,
-            'kp_tilt': 0.976,
-            'ki_tip': 91.98,
-            'ki_tilt': 91.98,
-            'max_angle': 0.01,
-            'enable_feedforward': True,
-            'enable_high_pass_filter': False
-        }
+        fsm_controller_config = self.config.fsm_controller_config 
+        #or {
+          #  'kp_tip': 9100.7912,
+          #  'kp_tilt': 9100.7912,
+          #  'kd_tip': 2.414,
+          #  'kd_tilt': 2.414,
+          #  'ki_tip': 1715458.7217,
+          #  'ki_tilt': 1715458.7217,
+        # 'max_angle': 0.1,
+           # 'enable_feedforward': True,
+          #  'enable_high_pass_filter': True
+      #  }
         self.fsm_controller = FSMController(fsm_controller_config)
     
     def _init_disturbances(self) -> None:
@@ -761,6 +797,11 @@ class DigitalTwinRunner:
             'torque_az', 'torque_el',
             'fsm_tip', 'fsm_tilt', 'fsm_cmd_tip', 'fsm_cmd_tilt',
             'fsm_saturated',
+            # Residual LOS error after FSM correction (the definitive performance metric)
+            'fsm_residual_error_x', 'fsm_residual_error_y',
+            # FSM PID internal state decomposition (for limit-cycle diagnosis)
+            'fsm_pid_p_tip', 'fsm_pid_i_tip',
+            'fsm_pid_p_tilt', 'fsm_pid_i_tilt',
             'z_enc_az', 'z_enc_el', 'z_gyro_az', 'z_gyro_el',
             'z_qpd_nes_x', 'z_qpd_nes_y',
             'los_error_x', 'los_error_y',
@@ -783,7 +824,8 @@ class DigitalTwinRunner:
             # Environmental disturbances (injected into plant)
             'tau_disturbance_az', 'tau_disturbance_el',
             'wind_torque_az', 'wind_torque_el',
-            'vibration_torque_az', 'vibration_torque_el'
+            'vibration_torque_az', 'vibration_torque_el',
+            'fsm_stroke_limit_rad'
         ]
     
     def _step_dynamics(self, dt: float) -> None:
@@ -987,9 +1029,15 @@ class DigitalTwinRunner:
         self.state.los_error_y = error_el
         
         # Apply FSM correction to beam pointing
-        # FSM deflects beam by 2× mirror angle
+        # FSM deflects beam by 2× mirror angle (optical doubling)
         corrected_error_az = error_az - 2.0 * self.state.fsm_tip
         corrected_error_el = error_el - 2.0 * self.state.fsm_tilt
+        
+        # Fix 3: Store residual LOS error (post-FSM) — the true performance metric.
+        # This is what the QPD actually senses. It must converge to zero for a
+        # well-functioning FSM controller, regardless of how fsm_tip/tilt look.
+        self.state.fsm_residual_error_x = corrected_error_az
+        self.state.fsm_residual_error_y = corrected_error_el
         
         # Map to focal plane
         focal_pos = self.optics.compute_spot_position(
@@ -1194,170 +1242,116 @@ class DigitalTwinRunner:
         
         Runs at fine control rate (default: 1 kHz)
         """
+        """
+        Update fine FSM controller (Level 2) with high-fidelity state-space dynamics.
+        """
         dt = self.config.dt_fine
         
         # ====================================================================
-        # STEP 0: FOV GATING (PHYSICS CHECK)
+        # STEP 0: FOV GATING
         # ====================================================================
-        # Determine the QPD Field of View threshold.
-        # Typically defined by the linear range in QPD config.
-        # If not explicit, we assume ~2 mrad for a standard QPD.
         qpd_fov_rad = self.config.qpd_config.get('linear_range', 0.015) if self.config.qpd_config else 0.015
-        
-        # Calculate the coarse pointing error to see if spot is on detector
-        # We look at the error BEFORE FSM correction to see if it even hits the mirror assembly/sensor
-        # Includes MAST VIBRATION in the truth check
         vib_az, vib_el = self._compute_vibration(self.time)
         
         if self.config.target_enabled:
-            # True Inertial Pointing Error = Target - (Gimbal + Base_Vibration)
             coarse_error_az = self.config.target_az - (self.state.q_az + vib_az)
             coarse_error_el = self.config.target_el - (self.state.q_el + vib_el)
-            
-            # Magnitude of coarse error
             coarse_error_mag = np.sqrt(coarse_error_az**2 + coarse_error_el**2)
-            
-            # Logic: If coarse error > FOV, the QPD sees NOTHING (or background noise).
-            # The FSM controller cannot operate on "truth" data it doesn't have.
             is_beam_on_sensor = coarse_error_mag < qpd_fov_rad
         else:
-            # If no target, we assume we are relying purely on sensor noise/inputs
-            # (Or manually checking vibration magnitude vs FOV, but usually assumed ON in test mode)
             is_beam_on_sensor = True
 
         # ====================================================================
         # STEP 1: ERROR SENSING
         # ====================================================================
-        
         total_error_tip = 0.0
         total_error_tilt = 0.0
         
-        if is_beam_on_sensor and self.config.target_enabled:
-            # Beam is ON PIXEL. FSM Control is ACTIVE.
+        if is_beam_on_sensor:
+            # The FSM controller can ONLY use the physical QPD sensor bounds!
+            # Using the mathematical true `residual_tip` bypasses the sensor 10V
+            # limits and drives massive, instant 50V limits leading to bang-bang dynamics.
+            # QPD outputs Volts. We use its known inverse sensitivity (V/rad) -> rad/V
+            qpd_sensitivity = getattr(self.qpd, 'sensitivity', 2000.0) if hasattr(self, 'qpd') else 2000.0
+            qpd_to_angle = 1.0 / qpd_sensitivity
             
-            # Pointing error from coarse stage (+ vibration)
-            error_az = coarse_error_az
-            error_el = coarse_error_el
-            
-            # FSM must correct for residual error
-            # Note: 2× factor because mirror deflection doubles the beam angle
-            # We treat the FSM frame as aligned with the Error frame for this simulation
-            residual_tip = error_az - 2.0 * self.state.fsm_tip
-            residual_tilt = error_el - 2.0 * self.state.fsm_tilt
-            
-            # Mix with QPD noise (simulating sensor reading)
-            qpd_to_angle = 1e-5 
-            qpd_noise_tip = self.state.z_qpd_nes_x * qpd_to_angle
-            qpd_noise_tilt = self.state.z_qpd_nes_y * qpd_to_angle
-            
-            # In a real system, the inputs are just qpd_noise_tip/tilt (the measurement).
-            # Here we combine truth + noise for the simulation model
-            total_error_tip = residual_tip + qpd_noise_tip
-            total_error_tilt = residual_tilt + qpd_noise_tilt
-            
-        elif not self.config.target_enabled:
-             # Legacy/Test mode without target
-            qpd_to_angle = 1e-5 
             total_error_tip = self.state.z_qpd_nes_x * qpd_to_angle
             total_error_tilt = self.state.z_qpd_nes_y * qpd_to_angle
-            
-        else:
-            # Beam is OFF SENSOR.
-            # Controller sees 0 error (or specific "searching" pattern, but here 0).
-            # It should NOT try to correct a 30 degree error.
-            total_error_tip = 0.0
-            total_error_tilt = 0.0
 
         # ====================================================================
-        # STEP 2: PIDF COMPENSATION
+        # STEP 2 & 3: PIDF+NOTCH COMPENSATION & VOLTAGE SATURATION
         # ====================================================================
-        
-        u_cmd = np.zeros(2)
+        # Let the FsmPidController handle its own internal saturation and anti-windup!
+        u_saturated = np.zeros(2)
 
-        # Only run full control logic if beam is on sensor or we are in a test mode
         if is_beam_on_sensor or not self.config.target_enabled:
-            # Use high-performance PIDF controller or legacy controller
             if hasattr(self, 'fsm_pid') and self.fsm_pid is not None:
-                # New PIDF controller with derivative filtering
-                setpoint = np.array([0.0, 0.0])  # Target: null the error
-                measurement = np.array([-total_error_tip, -total_error_tilt])  # Negative for error correction
+                setpoint = np.array([0.0, 0.0]) 
+                measurement = np.array([-total_error_tip, -total_error_tilt]) 
                 
-                # Compute control command
-                u_cmd = self.fsm_pid.update(setpoint, measurement, dt)
+                # The update() method inherently returns the SATURATED command
+                # and internally manages the back-calculation anti-windup.
+                u_saturated = self.fsm_pid.update(setpoint, measurement, dt)
+                
+                # Fix 5: Extract P/I decomposition for diagnostics.
+                # Reconstruct P-term (Kp * error) and I-state from controller internals.
+                I_state, D_state, e_prev = self.fsm_pid.get_internal_states()
+                Kp = np.array([self.fsm_pid.tip_gains.Kp, self.fsm_pid.tilt_gains.Kp])
+                error_tip  = setpoint[0] - measurement[0]
+                error_tilt = setpoint[1] - measurement[1]
+                p_tip  = Kp[0] * error_tip
+                p_tilt = Kp[1] * error_tilt
+                self.state.fsm_pid_p_tip  = float(p_tip)
+                self.state.fsm_pid_p_tilt = float(p_tilt)
+                self.state.fsm_pid_i_tip  = float(I_state[0])
+                self.state.fsm_pid_i_tilt = float(I_state[1])
             else:
                 # Legacy controller fallback
                 qpd_error = np.array([self.state.z_qpd_nes_x, self.state.z_qpd_nes_y])
-                fsm_cmd, fsm_meta = self.fsm_controller.compute_control(
-                    qpd_error,
-                    dt,
-                    coarse_residual=self.coarse_residual if hasattr(self, 'coarse_residual') else None
-                )
-                u_cmd = np.array([fsm_cmd[0], fsm_cmd[1]])
+                fsm_cmd, _ = self.fsm_controller.compute_control(qpd_error, dt, coarse_residual=None)
+                u_saturated = np.clip(np.array([fsm_cmd[0], fsm_cmd[1]]), -2.0, 2.0)
         else:
-            # Beam off sensor: 
-            # Ideally, we center the FSM to be ready for acquisition
-            # P-gain on FSM position only (centering spring)
-            # Or simply zero command if the plant has restoring force (flexures usually do)
-            u_cmd = np.array([0.0, 0.0])
-            
-            # CRITICAL: Hold integrator to prevent windup while waiting for beam
-            # This prevents the FSM from accumulating large integral values
-            # that would cause divergence when the beam returns on-sensor.
+            # Beam off sensor: Command 0V and freeze integrator to prevent windup on noise
             if hasattr(self, 'fsm_pid') and self.fsm_pid is not None:
                 self.fsm_pid.hold_integrator()
-        
-        # ====================================================================
-        # STEP 3: COMMAND SATURATION (VCA Voltage Limits)
-        # ====================================================================
-        # Physical limits: ±10V for Voice Coil Actuators
-        u_min = -2.0
-        u_max = 2.0
-        u_saturated = np.clip(u_cmd, u_min, u_max)
-        
-        # Store commands for logging
+                
+        # Logging Commands
         self.state.fsm_cmd_tip = u_saturated[0]
         self.state.fsm_cmd_tilt = u_saturated[1]
-        
-        # Check saturation status
-        self.state.fsm_saturated = not np.allclose(u_cmd, u_saturated)
-        
+
         # ====================================================================
         # STEP 4: STATE-SPACE PROPAGATION (RK4 Integration)
         # ====================================================================
-        # Propagate 4th-order dynamics: x_{k+1} = f(x_k, u_k, dt)
-        # Uses Runge-Kutta 4th order for numerical stability
         try:
             y_output = self.fsm_dynamics.step(u_saturated, dt)
         except Exception as e:
             print(f"WARNING: FSM dynamics integration failed: {e}")
-            print(f"  State: {self.fsm_dynamics.get_state()}")
-            print(f"  Command: {u_saturated}")
-            # Use previous output as fallback
             y_output = np.array([self.state.fsm_tip, self.state.fsm_tilt])
-        
+
         # ====================================================================
-        # STEP 5: OUTPUT MAPPING & STATE UPDATE
+        # STEP 5: MECHANICAL STROKE SATURATION (Equation 8)
         # ====================================================================
-        # Extract optical angles from state-space output
-        self.state.fsm_tip = y_output[0]    # θ_tip [rad]
-        self.state.fsm_tilt = y_output[1]   # θ_tilt [rad]
+        # Enforce physical bump-stops (e.g., ±10 mrad for PI S-330)
+        stroke_limit_rad = getattr(self.config, 'fsm_stroke_limit_rad', 0.010) 
         
-        # Store internal state vector for diagnostics
+        y_actual = np.clip(y_output, -stroke_limit_rad, stroke_limit_rad)
+        self.state.fsm_tip = y_actual[0]
+        self.state.fsm_tilt = y_actual[1]
+        # Flag if mirror physically hit the stops (Catastrophic Link Loss)
+        hit_stroke_limit = not np.allclose(y_output, y_actual)
+        self.state.fsm_stroke_saturated = hit_stroke_limit
+        
+        # Update optical angles
+        self.state.fsm_tip = y_actual[0]    
+        self.state.fsm_tilt = y_actual[1]   
         self.state.fsm_state_x = self.fsm_dynamics.get_state()
-        
-        # Sanity check: Detect divergence (NaN or excessive values)
+
         if np.any(np.isnan(self.state.fsm_state_x)) or np.any(np.abs(self.state.fsm_state_x) > 1e6):
             print("ERROR: FSM state divergence detected! Resetting dynamics...")
             self.fsm_dynamics.reset()
             self.state.fsm_tip = 0.0
             self.state.fsm_tilt = 0.0
-            self.state.fsm_state_x = np.zeros(4)
-        
-        # ====================================================================
-        # LEGACY COMPATIBILITY: Update old FSM actuator model
-        # ====================================================================
-        # Keep legacy model synchronized for backward compatibility
-        self.fsm.step(self.state.fsm_tip, self.state.fsm_tilt, dt)
+            self.state.fsm_state_x = np.zeros(self._fsm_n_states)
         
         # ====================================================================
         # TOTAL POINTING CALCULATION
@@ -1403,8 +1397,17 @@ class DigitalTwinRunner:
             self.log_data['z_qpd_nes_y'].append(self.state.z_qpd_nes_y)
             self.log_data['los_error_x'].append(self.state.los_error_x)
             self.log_data['los_error_y'].append(self.state.los_error_y)
+            # Fix 3: Residual LOS error after FSM correction (definitive performance metric)
+            self.log_data['fsm_residual_error_x'].append(self.state.fsm_residual_error_x)
+            self.log_data['fsm_residual_error_y'].append(self.state.fsm_residual_error_y)
+            # Fix 5: FSM PID P/I decomposition for limit-cycle diagnosis
+            self.log_data['fsm_pid_p_tip'].append(self.state.fsm_pid_p_tip)
+            self.log_data['fsm_pid_i_tip'].append(self.state.fsm_pid_i_tip)
+            self.log_data['fsm_pid_p_tilt'].append(self.state.fsm_pid_p_tilt)
+            self.log_data['fsm_pid_i_tilt'].append(self.state.fsm_pid_i_tilt)
             self.log_data['target_az'].append(self.config.target_az)
             self.log_data['target_el'].append(self.config.target_el)
+            self.log_data['fsm_stroke_limit_rad'].append(float(getattr(self.config, 'fsm_stroke_limit_rad', 0.010)))
 
             # Coarse-loop diagnostics (best-effort)
             self.log_data['coarse_tau_cmd_az'].append(float(self.last_tau_cmd[0]))
@@ -2295,7 +2298,7 @@ class DigitalTwinRunner:
         self.voltage_cmd_el = 0.0
         self.last_tau_cmd = np.zeros(2)
         self.last_coarse_meta = {}
-        self.fsm.reset()
+        self.fsm_dynamics.reset()
         self.encoder_az.reset()
         self.encoder_el.reset()
         self.gyro_az.reset()
