@@ -725,7 +725,7 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     # Common test parameters
     target_az_deg = 0
     target_el_deg = 0
-    duration = 2 # Increased to show full wave periods
+    duration = 5 # Increased to show full wave periods
     
     # Signal characteristics
     target_amplitude = 90.0 # degrees
@@ -816,8 +816,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     config_pid = SimulationConfig(
         dt_sim=0.001,
         dt_coarse=0.01,
-        dt_fine=0.001,
-        dt_qpd=0.001,
+        dt_fine=0.0001,
+        dt_qpd=0.0001,
         log_period=0.001,
         seed=42,
         target_az=np.deg2rad(target_az_deg),
@@ -865,11 +865,11 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     print("-" * 80)
     
     config_fl = SimulationConfig(
-        dt_sim=0.00001,
+        dt_sim=0.001,
         dt_coarse=0.01,
         dt_fine=0.00001,
         dt_qpd=0.00001,
-        log_period=0.001,
+        log_period=0.0001,
         seed=42,
         target_az=np.deg2rad(target_az_deg),
         target_el=np.deg2rad(target_el_deg),
@@ -1081,7 +1081,7 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     print("  - Right-click green rectangle to delete directly")
     
     plotter = ResearchComparisonPlotter(
-        save_figures=True,
+        save_figures=False,
         show_figures=True,
         interactive=False  # Disabled for automated data collection
     )
