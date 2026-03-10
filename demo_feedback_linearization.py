@@ -816,8 +816,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     config_pid = SimulationConfig(
         dt_sim=0.001,
         dt_coarse=0.01,
-        dt_fine=0.0001,
-        dt_qpd=0.0001,
+        dt_fine=0.001,
+        dt_qpd=0.001,
         log_period=0.001,
         seed=42,
         target_az=np.deg2rad(target_az_deg),
@@ -896,8 +896,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
             # Design for ωn = 20 rad/s (3.2 Hz), ζ = 1.0 (critically damped)
             # Kp = ωn² = 400, Kd = 2*ζ*ωn = 40
             # With friction feedforward for best baseline performance
-            'kp': [400.0, 600.0],    # Position gain [1/s²]
-            'kd': [40.0, 40.0],      # Velocity gain [1/s] - critically damped
+            'kp': [400.0, 800.0],    # Position gain [1/s²]
+            'kd': [40.0, 60.0],      # Velocity gain [1/s] - critically damped
             'ki': [50.0, 25.0],      # Integral for residual disturbances
             'enable_integral': True,  # ENABLE for steady-state performance
             'tau_max': [10.0, 10.0],
