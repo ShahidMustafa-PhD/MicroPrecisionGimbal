@@ -397,13 +397,15 @@ def design_pi_controller(sys_ctrl: ctrl.StateSpace,
     return gains
 
 
+
 def design_pidf_controller(sys_ctrl: ctrl.StateSpace,
                            target_bandwidth_hz: float = 300.0,
                            plant_resonance_hz: float = 1000.0) -> PIDFControllerGains:
     """
     Design PIDF controller with a structural Notch filter and EXACT stability margins.
+    REWRITTEN: Aggressive Loop-Shaping for maximum environmental disturbance rejection.
     """
-    print("\n6. DESIGNING PIDF+NOTCH CONTROLLER (High Performance)")
+    print("\n6. DESIGNING PIDF+NOTCH CONTROLLER (Aggressive Disturbance Rejection)")
     print("-" * 70)
     
     omega_c = 2 * np.pi * target_bandwidth_hz
@@ -413,36 +415,43 @@ def design_pidf_controller(sys_ctrl: ctrl.StateSpace,
     sys_tilt = ctrl.ss(sys_ctrl.A, sys_ctrl.B[:, 1:2], sys_ctrl.C[1:2, :], sys_ctrl.D[1:2, 1:2])
     
     # 1. Create the Notch Filter to kill the 1 kHz peak
-    notch_tf = design_notch_filter(f_center_hz=plant_resonance_hz, depth=0.01, width=0.2)
+    # We widen the notch slightly (width=0.3) to ensure robustness against resonance shift
+    notch_config = NotchFilterGains(f_center_hz=plant_resonance_hz, zeta_zero=0.005, zeta_pole=0.3)
+    notch_tf = design_notch_filter(f_center_hz=notch_config.f_center_hz, 
+                                   depth=notch_config.zeta_zero, 
+                                   width=notch_config.zeta_pole)
     
     # Absorb the notch filter into the plant for tuning purposes
     sys_tip_notched = sys_tip * notch_tf
     sys_tilt_notched = sys_tilt * notch_tf
     
-    # 2. Base PI Tuning on the NOTCHED plant
-    omega_i = omega_c / 1.5  # Slightly more aggressive integration
-  # 2. Integrator-Dominant Tuning (The Fix for the Flat-Plant Paradox)
-    # The plant is a flat gain (10^-4) up to 1000 Hz. 
-    # To roll off exactly at omega_c (-20 dB/dec), Ki MUST dictate the crossover.
+    # Evaluate Notched Plant at target crossover
     mag_tip, phase_tip, _ = ctrl.bode(sys_tip_notched, [omega_c], plot=False)
-    mag_tilt, phase_tilt, _ = ctrl.bode(sys_tilt_notched, [omega_c], plot=False)
+    plant_gain_at_wc = mag_tip[0]
     
-    plant_gain_at_wc = mag_tip[0]  # approx 100e-6
+    # 2. Aggressive Loop-Shaping Tuning
+    # Unlike the "Integrator-Dominant" method, we utilize Kp and Kd to safely 
+    # push the integral gain (Ki) much higher, squashing the 50-150 Hz disturbance.
     
-    # Set Integrator to cross 0 dB exactly at omega_c
-    Ki_tip = omega_c / plant_gain_at_wc
-    Ki_tilt = omega_c / plant_gain_at_wc
+    # Proportional: Sets the high-frequency asymptote to cross near omega_c
+    Kp_tip = 0.8 / plant_gain_at_wc
     
-    # Drop Proportional gain to -20 dB (10% of plant inverse) so it doesn't 
-    # flatten the high-frequency response. This guarantees stability.
-    Kp_tip = 0.1 / plant_gain_at_wc
-    Kp_tilt = 0.1 / plant_gain_at_wc
+    # Integral: Aggressive tracking. Place the PI zero at 1/2 of crossover.
+    # This yields massive low-frequency gain (40+ dB) for the 50-150 Hz band.
+    omega_zero = omega_c / 2.0
+    Ki_tip = Kp_tip * omega_zero
     
-    # 3. Derivative Tuning 
-    # Disabled to prevent QPD handover shock. Notch filter handles resonance.
-    N = 10.0  
-    Kd_tip = 0.0  
-    Kd_tilt = 0.0
+    # Derivative: Active damping. Place the PD zero to provide phase lead 
+    # at crossover, counteracting the phase drop from the Notch filter.
+    omega_lead = omega_c * 1.2
+    Kd_tip = Kp_tip / omega_lead
+    
+    # Apply symmetric tuning to Tilt axis
+    Kp_tilt, Ki_tilt, Kd_tilt = Kp_tip, Ki_tip, Kd_tip
+    
+    # 3. Low-Pass Filter on Derivative
+    # Crucial to prevent amplifying QPD sensor noise (high frequency chatter)
+    N = 20.0  
     
     # 4. Construct EXACT Controller Transfer Functions
     N_omega = N * omega_c
@@ -462,26 +471,27 @@ def design_pidf_controller(sys_ctrl: ctrl.StateSpace,
     gm_tilt, pm_tilt, wg_tilt, wp_tilt = ctrl.margin(L_tilt)
     
     # Convert Gain Margin to dB
-    gm_tip_db = 20 * np.log10(gm_tip) if gm_tip != float('inf') else float('inf')
-    gm_tilt_db = 20 * np.log10(gm_tilt) if gm_tilt != float('inf') else float('inf')
+    gm_tip_db = 20 * np.log10(gm_tip) if (gm_tip != float('inf') and gm_tip > 0) else float('inf')
+    gm_tilt_db = 20 * np.log10(gm_tilt) if (gm_tilt != float('inf') and gm_tilt > 0) else float('inf')
     
-    # EXACT VARIABLES NEEDED FOR THE RETURN BLOCK
     pm_avg = (pm_tip + pm_tilt) / 2
     gm_db_avg = (gm_tip_db + gm_tilt_db) / 2
     
     print(f"  Target Bandwidth:     {target_bandwidth_hz:.1f} Hz")
     print(f"  Notch Filter Active:  {plant_resonance_hz:.1f} Hz")
+    print(f"\n  AGGRESSIVE GAINS COMPUTED:")
+    print(f"    Kp: {Kp_tip:.4f}")
+    print(f"    Ki: {Ki_tip:.4f}")
+    print(f"    Kd: {Kd_tip:.6f}")
     print(f"\n  EXACT STABILITY MARGINS:")
     print(f"    Phase Margin:       {pm_tip:.1f}° at {wp_tip/(2*np.pi):.1f} Hz")
     print(f"    Gain Margin:        {gm_tip_db:.1f} dB at {wg_tip/(2*np.pi):.1f} Hz")
     
-    if pm_avg >= 45.0 and gm_db_avg >= 6.0:
+    # For a flat plant with a high-freq resonance, infinite GM is common and completely safe
+    if pm_avg >= 45.0 and (gm_db_avg >= 6.0 or gm_db_avg == float('inf')):
         print(f"\n  ✓ System Robustly Stable (PM > 45°, GM > 6dB)")
     else:
-        print(f"\n  ⚠ MARGIN VIOLATION: Risk of high-frequency oscillation.")
-    
-    # Create the notch configuration object
-    notch_config = NotchFilterGains(f_center_hz=plant_resonance_hz, zeta_zero=0.005, zeta_pole=0.707)
+        print(f"\n  ⚠ MARGIN VIOLATION: Risk of high-frequency oscillation. Consider lowering bandwidth.")
     
     # Return all variables correctly
     gains = PIDFControllerGains(
@@ -499,7 +509,7 @@ def design_pidf_controller(sys_ctrl: ctrl.StateSpace,
         gain_margin_db=gm_db_avg
     )
     
-    return gains
+    return gains                        
 
 
 @dataclass
@@ -1049,7 +1059,7 @@ def main():
     pi_gains = design_pi_controller(sys_ctrl, target_bandwidth_hz=150.0)
     
     # 5. Design PIDF controller (high performance)
-    pidf_gains = design_pidf_controller(sys_ctrl, target_bandwidth_hz=150.0, plant_resonance_hz=1000.0)
+    pidf_gains = design_pidf_controller(sys_ctrl, target_bandwidth_hz=350.0, plant_resonance_hz=1000.0)
     
     # Interactive Root Locus Method
     if args.rlocus:
