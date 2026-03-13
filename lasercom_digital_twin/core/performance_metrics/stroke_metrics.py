@@ -16,9 +16,12 @@ loop and causing an immediate loss of FSO link.
 
 Three benchmark metrics characterise this "Handover Bottleneck":
 
-1.  **SCR — Stroke Consumption Ratio** (Eq. 8 in the paper)
-    Quantifies the PEAK fraction of the total dynamic range consumed.
-    SCR → 100 % means the system is operating at the "Edge of Stability."
+1.  **SCR_RMS — Root-Mean-Square Stroke Consumption Ratio** (Eq. 9 in the paper)
+    Quantifies the continuous, time-averaged percentage of the total 
+    dynamic range consumed. SCR_RMS provides a robust measure of the 
+    sustained kinematic load demanded from the piezoelectric actuators, 
+    heavily penalizing sustained sensor drop-outs while ignoring 
+    micro-glitches.
 
 2.  **S_bias — Bias Consumption** (Eq. 10)
     Quantifies the MEAN fraction of stroke continuously sacrificed to
@@ -81,9 +84,8 @@ class StrokeMetricsResult:
         FSM mechanical stroke limit [rad].  Primary calibration constant.
 
     scr_tip / scr_tilt : float
-        Stroke Consumption Ratio [%] per axis.
-        SCR = max|θ_fsm| / θ_max × 100
-        Range: [0, ∞).  Values > 100 % imply saturation was observed.
+        RMS Stroke Consumption Ratio [%] per axis.
+        SCR_RMS = (1/Θ_max) * sqrt((1/T) * ∫|θ_fsm(t)|^2 dt) * 100
 
     s_bias_tip / s_bias_tilt : float
         Mean Bias Consumption [rad] per axis.
@@ -99,11 +101,12 @@ class StrokeMetricsResult:
         Positive DSM → safe; negative DSM → guaranteed link dropout.
 
     scr_timeseries_tip / scr_timeseries_tilt : np.ndarray
-        Running SCR(t) [%] at every logged time step.  Used for the
-        time-domain panel of fig14.
+        Instantaneous stroke consumption [%] at every logged time step.
+        Used for the time-domain panel of Fig 14.
 
     abs_fsm_tip / abs_fsm_tilt : np.ndarray
-        |θ_fsm(t)| [rad] — used to plot bias consumption visually.
+        |θ_fsm(t)| [rad] — functionally corrected. Used to plot 
+        bias consumption visually.
 
     time : np.ndarray
         Time vector corresponding to the time-series outputs [s].
@@ -112,7 +115,7 @@ class StrokeMetricsResult:
     # Calibration
     theta_max: float
 
-    # SCR — Peak ratios
+    # SCR — RMS ratios
     scr_tip: float
     scr_tilt: float
 
@@ -189,7 +192,7 @@ class StrokeMetricsResult:
             "  ┌─────────────────────────────┬──────────┬──────────┐",
             "  │ Metric                      │   Tip    │   Tilt   │",
             "  ├─────────────────────────────┼──────────┼──────────┤",
-            f"  │ SCR (Peak Consumption) [%]  │ {self.scr_tip:7.1f}  │ {self.scr_tilt:7.1f}  │",
+            f"  │ SCR_RMS (RMS Load) [%]      │ {self.scr_tip:7.1f}  │ {self.scr_tilt:7.1f}  │",
             f"  │ S_bias (Mean Load) [mrad]   │ {self.s_bias_tip_mrad:7.3f}  │ {self.s_bias_tilt_mrad:7.3f}  │",
             f"  │ σ_jitter (HF wander) [mrad] │ {self.sigma_jitter_tip*1e3:7.4f}  │ {self.sigma_jitter_tilt*1e3:7.4f}  │",
             f"  │ DSM (Remaining margin)[mrad]│ {self.dsm_tip_mrad:7.3f}  │ {self.dsm_tilt_mrad:7.3f}  │",
@@ -205,7 +208,7 @@ class StrokeMetricsResult:
 # ---------------------------------------------------------------------------
 class StrokeMetrics:
     """
-    Calculates Stroke Consumption Ratio (SCR), Bias Consumption (S_bias),
+    Calculates RMS Stroke Consumption Ratio (SCR), Bias Consumption (S_bias),
     and Dynamic Stroke Margin (DSM) from FSM telemetry.
 
     This class is stateless between calls to :meth:`compute`.  A single
@@ -228,12 +231,6 @@ class StrokeMetrics:
         Butterworth filter order.  Higher order → sharper transition band,
         but may produce Gibbs ringing near the cutoff.
         Default: 4 (trade-off between sharpness and numerical stability).
-
-    Notes
-    -----
-    The Butterworth filter is applied with `scipy.signal.filtfilt` (zero-phase,
-    forward-backward pass) to avoid introducing phase distortion that would
-    artificially inflate the jitter estimate.
     """
 
     def __init__(
@@ -262,6 +259,7 @@ class StrokeMetrics:
         fsm_tip: np.ndarray,
         fsm_tilt: np.ndarray,
         dt: Optional[float] = None,
+        link_active: Optional[np.ndarray] = None,
     ) -> StrokeMetricsResult:
         """
         Compute all three Stroke Consumption benchmark metrics.
@@ -269,27 +267,23 @@ class StrokeMetrics:
         Parameters
         ----------
         time : array-like, shape (N,)
-            Logged simulation time vector [s].  Must be monotonically
-            increasing and uniformly sampled (or close to it).
+            Logged simulation time vector [s].
         fsm_tip : array-like, shape (N,)
             FSM tip mechanical angle [rad].
         fsm_tilt : array-like, shape (N,)
             FSM tilt mechanical angle [rad].
         dt : float, optional
-            Nominal sampling interval [s].  If None, inferred from the
-            median difference of the `time` vector.
-
-        Returns
-        -------
-        StrokeMetricsResult
-            Immutable result container with all three metrics and their
-            time-series representations ready for plotting.
-
-        Raises
-        ------
-        ValueError
-            If the arrays contain NaN/Inf or have fewer than
-            ``_MIN_SAMPLES_FOR_STATS`` samples.
+            Nominal sampling interval [s].  If None, inferred from time array.
+        link_active : array-like, shape (N,), optional
+            Boolean array indicating whether the optical link was active
+            (beam on QPD sensor) at each time step.  When ``False``, the
+            FSM parks at 0° physically but the system has *functionally*
+            exceeded its stroke limit.  This parameter enables the
+            **Functional Saturation Override**: at every time step where
+            ``link_active`` is ``False`` (and outside the settling window), 
+            ``|θ_fsm|`` is replaced by ``theta_max`` so that SCR_RMS, 
+            S_bias, and DSM correctly reflect 100 % stroke consumption 
+            during sensor drop-outs.
         """
         time = np.asarray(time, dtype=float)
         fsm_tip = np.asarray(fsm_tip, dtype=float)
@@ -301,33 +295,61 @@ class StrokeMetrics:
         if dt is None:
             dt = float(np.median(np.diff(time)))
             
-        # [FIX] Trap for dt <= 0 which would cause ZeroDivisionError during filtering
         if dt <= 0.0:
             raise ValueError("Inferred time step (dt) is zero or negative. Time vector must be strictly increasing.")
 
-        # ── SCR ──────────────────────────────────────────────────────────
+        # ── Functional Saturation Override Setup ─────────────────────────
         abs_tip = np.abs(fsm_tip)
         abs_tilt = np.abs(fsm_tilt)
+        
+        # Create copies for our "Functional" data analysis
+        abs_tip_functional = abs_tip.copy()
+        abs_tilt_functional = abs_tilt.copy()
 
-        peak_tip = float(np.max(abs_tip))
-        peak_tilt = float(np.max(abs_tilt))
+        if link_active is not None:
+            link_active = np.asarray(link_active, dtype=bool)
+            if link_active.shape != abs_tip.shape:
+                raise ValueError("The 'link_active' array length must match the time/signal arrays.")
+                
+            # Distinguish between "Initial Slew" and "Failure Dropout"
+            # has_acquired stays False until the first time link_active becomes True, then stays True forever.
+            has_acquired = np.maximum.accumulate(link_active)
+            
+            # Mask out initial Handover Chatter (Settling Time)
+            # We arm the failure detector ONLY after steady-state is reached (t >= 0.8s)
+            is_steady_state = time >= 0.8
+            
+            # A failure is ONLY when the system has previously acquired the beam, 
+            # currently lost it, AND is past the initial settling phase.
+            is_failure_dropout = has_acquired & (~link_active) & is_steady_state
+                
+            # Override the parked 0 rad with the maximum stroke limit ONLY during a functional failure
+            abs_tip_functional = np.where(is_failure_dropout, self.theta_max, abs_tip)
+            abs_tilt_functional = np.where(is_failure_dropout, self.theta_max, abs_tilt)
 
-        scr_tip = (peak_tip / self.theta_max) * 100.0
-        scr_tilt = (peak_tilt / self.theta_max) * 100.0
+        # ── SCR_RMS (Equation 9: RMS Stroke Consumption Ratio) ───────────
+        # We calculate the Root Mean Square of the functional stroke array.
+        # This heavily penalizes sustained dropouts while ignoring 1ms glitches.
+        rms_tip = float(np.sqrt(np.mean(abs_tip_functional**2)))
+        rms_tilt = float(np.sqrt(np.mean(abs_tilt_functional**2)))
 
-        # Running SCR(t) for time-domain plot
-        running_peak_tip = np.maximum.accumulate(abs_tip)
-        running_peak_tilt = np.maximum.accumulate(abs_tilt)
-        scr_ts_tip = (running_peak_tip / self.theta_max) * 100.0
-        scr_ts_tilt = (running_peak_tilt / self.theta_max) * 100.0
+        # Scalar metrics for the final printed report
+        scr_tip = (rms_tip / self.theta_max) * 100.0
+        scr_tilt = (rms_tilt / self.theta_max) * 100.0
+
+        # Time-series arrays for Fig 14 top subplot (Instantaneous % consumed)
+        scr_ts_tip = (abs_tip_functional / self.theta_max) * 100.0
+        scr_ts_tilt = (abs_tilt_functional / self.theta_max) * 100.0
 
         # ── S_bias ───────────────────────────────────────────────────────
         T = time[-1] - time[0]
-        # [FIX] Explicitly pass `x=time` to support exact API requirements across NumPy 1.x and 2.x
-        s_bias_tip = float(_trapz(abs_tip, x=time) / T) if T > 0 else 0.0
-        s_bias_tilt = float(_trapz(abs_tilt, x=time) / T) if T > 0 else 0.0
+        s_bias_tip = float(_trapz(abs_tip_functional, x=time) / T) if T > 0 else 0.0
+        s_bias_tilt = float(_trapz(abs_tilt_functional, x=time) / T) if T > 0 else 0.0
 
         # ── σ_jitter (High-pass filter, zero-phase) ───────────────────────
+        # CRITICAL PHYSICS LOGIC: Use the RAW fsm_tip/tilt here! The override injects 
+        # theta_max square-wave artifacts that would violently destabilize the Butterworth 
+        # High-Pass filter and artificially inflate sigma_jitter far beyond physical reality.
         sigma_jitter_tip = self._compute_jitter_sigma(fsm_tip, dt)
         sigma_jitter_tilt = self._compute_jitter_sigma(fsm_tilt, dt)
 
@@ -348,8 +370,8 @@ class StrokeMetrics:
             time=time,
             scr_timeseries_tip=scr_ts_tip,
             scr_timeseries_tilt=scr_ts_tilt,
-            abs_fsm_tip=abs_tip,
-            abs_fsm_tilt=abs_tilt,
+            abs_fsm_tip=abs_tip_functional,
+            abs_fsm_tilt=abs_tilt_functional,
         )
 
     # ------------------------------------------------------------------
@@ -359,23 +381,15 @@ class StrokeMetrics:
         """
         Isolate and compute the standard deviation of the high-frequency
         component of `signal` using a zero-phase Butterworth high-pass filter.
-
-        Falls back to the overall std if the filter would be unstable
-        (e.g. cutoff > Nyquist) or if there are too few samples.
         """
         fs = 1.0 / dt
         nyquist = fs / 2.0
         normalized_cutoff = self.jitter_cutoff_hz / nyquist
 
-        # [FIX] Correct padlen calculation for filtfilt.
-        # filtfilt defaults to a padlen of 3 * max(len(a), len(b)).
-        # For a Butterworth filter of order N, the coefficient arrays are of length N+1.
-        # Thus, padlen is 3 * (order + 1). The signal MUST be strictly longer than padlen.
+        # Correct padlen calculation for filtfilt.
         padlen = 3 * (self.filter_order + 1)
 
-        # Ensure filter is computationally viable
         if normalized_cutoff >= 1.0 or len(signal) <= padlen:
-            # Fallback: use overall std (conservative, but never crashes)
             return float(np.std(signal))
 
         try:
@@ -383,7 +397,6 @@ class StrokeMetrics:
             hf_signal = filtfilt(b, a, signal)
             return float(np.std(hf_signal))
         except Exception:
-            # Numerically safe fallback
             return float(np.std(signal))
 
     @staticmethod
