@@ -237,6 +237,7 @@ class SimulationState:
     fsm_pid_i_tilt: float = 0.0    # Integral accumulator [V]
     
     fsm_saturated: bool = False    # FSM saturation flag
+    is_beam_on_sensor: bool = True  # True when beam is within QPD FoV
 
     # NDOB (Nonlinear Disturbance Observer) estimates
     d_hat_ndob_az: float = 0.0     # Estimated disturbance Az [N·m]
@@ -825,7 +826,8 @@ class DigitalTwinRunner:
             'tau_disturbance_az', 'tau_disturbance_el',
             'wind_torque_az', 'wind_torque_el',
             'vibration_torque_az', 'vibration_torque_el',
-            'fsm_stroke_limit_rad'
+            'fsm_stroke_limit_rad',
+            'is_beam_on_sensor'
         ]
     
     def _step_dynamics(self, dt: float) -> None:
@@ -1261,6 +1263,9 @@ class DigitalTwinRunner:
         else:
             is_beam_on_sensor = True
 
+        # Store for telemetry logging (used by Functional Saturation Override)
+        self.state.is_beam_on_sensor = is_beam_on_sensor
+
         # ====================================================================
         # STEP 1: ERROR SENSING
         # ====================================================================
@@ -1471,6 +1476,9 @@ class DigitalTwinRunner:
             self.log_data['ekf_innovation_gyro_el'].append(float(self.state.ekf_innovation_gyro_el))
             self.log_data['ekf_innovation_3sigma_az'].append(float(self.state.ekf_innovation_3sigma_az))
             self.log_data['ekf_innovation_3sigma_el'].append(float(self.state.ekf_innovation_3sigma_el))
+            
+            # Beam-on-sensor flag (used by Functional Saturation Override in stroke metrics)
+            self.log_data['is_beam_on_sensor'].append(bool(self.state.is_beam_on_sensor))
             
             self.last_log_time = self.time
     
