@@ -226,6 +226,7 @@ class ResearchComparisonPlotter:
         self.figures['fig13_statistics'] = self._plot_disturbance_statistics()
         self.figures['fig14_stroke_metrics'] = self._plot_stroke_consumption()
         self.figures['fig15_stroke_summary'] = self._plot_stroke_margin_summary()
+        self.figures['fig16_benchmark_table'] = self._plot_benchmark_table()
         
         # Save figures FIRST (before making interactive) to get clean PDFs without buttons
         if self.save_figures:
@@ -1323,11 +1324,11 @@ class ResearchComparisonPlotter:
 
     # ─────────────────────────────────────────────────────────────────────────
     def _plot_stroke_consumption(self) -> plt.Figure:
-        """Figure 14: Stroke Consumption Ratio & Instantaneous Stroke Load.
+        """Figure 14: Instantaneous Stroke Utilization & Stroke Load.
 
         Two-panel layout:
-          Panel 1 (full-width): Running SCR(t) for all three controllers.
-          Panel 2 (full-width): |θ_fsm(t)| vs ±θ_max limit.
+          Panel 1: Instantaneous Stroke Utilization (%) - Azimuth (Tip).
+          Panel 2: Instantaneous Stroke Utilization (%) - Elevation (Tilt).
         """
         stroke_lim_arr = self._results_ndob['log_arrays'].get('fsm_stroke_limit_rad', None)
         theta_max = float(stroke_lim_arr[0]) if stroke_lim_arr is not None else 0.010
@@ -1338,24 +1339,34 @@ class ResearchComparisonPlotter:
             t = np.asarray(log_arrays['time'])
             return float(np.median(np.diff(t))) if len(t) > 1 else 1e-4
 
+        def _get_link_active(log_arrays):
+            """Extract is_beam_on_sensor as a numpy bool array, or None."""
+            raw = log_arrays.get('is_beam_on_sensor', None)
+            if raw is not None:
+                return np.asarray(raw, dtype=bool)
+            return None
+
         try:
             m_pid = calculator.compute(
                 time=np.asarray(self._results_pid['log_arrays']['time']),
                 fsm_tip=np.asarray(self._results_pid['log_arrays']['fsm_tip']),
                 fsm_tilt=np.asarray(self._results_pid['log_arrays']['fsm_tilt']),
                 dt=_infer_dt(self._results_pid['log_arrays']),
+                link_active=_get_link_active(self._results_pid['log_arrays']),
             )
             m_fbl = calculator.compute(
                 time=np.asarray(self._results_fbl['log_arrays']['time']),
                 fsm_tip=np.asarray(self._results_fbl['log_arrays']['fsm_tip']),
                 fsm_tilt=np.asarray(self._results_fbl['log_arrays']['fsm_tilt']),
                 dt=_infer_dt(self._results_fbl['log_arrays']),
+                link_active=_get_link_active(self._results_fbl['log_arrays']),
             )
             m_ndob = calculator.compute(
                 time=np.asarray(self._results_ndob['log_arrays']['time']),
                 fsm_tip=np.asarray(self._results_ndob['log_arrays']['fsm_tip']),
                 fsm_tilt=np.asarray(self._results_ndob['log_arrays']['fsm_tilt']),
                 dt=_infer_dt(self._results_ndob['log_arrays']),
+                link_active=_get_link_active(self._results_ndob['log_arrays']),
             )
         except Exception as exc:
             fig, ax = plt.subplots(figsize=self.style.get_figure_size('2x1'), constrained_layout=self._get_layout_mode())
@@ -1363,59 +1374,59 @@ class ResearchComparisonPlotter:
             ax.set_axis_off()
             return fig
 
-        fig = plt.figure(figsize=self.style.get_figure_size('2x1'), constrained_layout=self._get_layout_mode())
-        gs = fig.add_gridspec(2, 1, height_ratios=[1.0, 1.0], hspace=0.35)
-        ax_scr   = fig.add_subplot(gs[0])
-        ax_bias  = fig.add_subplot(gs[1])
+        fig, (ax_tip, ax_tilt) = plt.subplots(2, 1, figsize=self.style.get_figure_size('2x1'),
+                                              sharex=True, constrained_layout=self._get_layout_mode())
 
         lw    = self.style.linewidth_primary
         alpha = self.style.alpha_primary
-        lim_mrad = theta_max * 1e3
 
+        # Panel 1: Azimuth (Tip)
         for m, label, color, ls in [
             (m_pid,  'PID',      ControllerColors.PID,      '-'),
             (m_fbl,  'FBL',      ControllerColors.FBL,      '-'),
             (m_ndob, 'FBL+NDOB', ControllerColors.FBL_NDOB, '-'),
         ]:
-            ax_scr.plot(m.time, m.scr_timeseries_tip, color=color, lw=lw,
-                        alpha=alpha, linestyle=ls, label=f'{label} Tip')
-            ax_scr.plot(m.time, m.scr_timeseries_tilt, color=color, lw=lw,
-                        alpha=alpha * 0.5, linestyle='--')
+            ax_tip.plot(m.time, m.scr_timeseries_tip, color=color, lw=lw,
+                        alpha=alpha, linestyle=ls, label=f'{label}')
 
-        ax_scr.axhline(100.0, color='red', lw=1.5, linestyle=':', label='Saturation (100 %)')
-        ax_scr.axhspan(80.0, max(ax_scr.get_ylim()[1] if ax_scr.get_ylim()[1] is not None else 100.0, 110.0), alpha=0.07, color='red')
-        ax_scr.axhspan(0.0, 80.0, alpha=0.04, color='green')
-        ax_scr.set_ylim(bottom=0.0)
-        ax_scr.set_ylabel('SCR [%]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax_scr.set_title(r'Stroke Consumption Ratio SCR$(t)$ — Running Peak % of FSM Stroke Consumed',
+        ax_tip.axhline(100.0, color='red', lw=1.5, linestyle=':', label='Saturation Limit')
+        
+        # Calculate upper y-limit based on actual max data
+        max_tip = max([np.max(m.scr_timeseries_tip) for m in [m_pid, m_fbl, m_ndob]] + [110.0])
+        ax_tip.axhspan(100.0, max_tip * 1.05, alpha=0.07, color='red')
+        ax_tip.axhspan(0.0, 80.0, alpha=0.04, color='green')
+        ax_tip.set_ylim(bottom=0.0, top=max_tip * 1.05)
+        ax_tip.set_ylabel('Utilization Ratio [%]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
+        ax_tip.set_title(r'(a) Azimuth Axis (Tip) — Instantaneous Stroke Utilization $\left( \frac{|\theta_{FSM}(t)|}{\Theta_{max}} \right)$',
                          fontsize=self.style.title_fontsize, fontweight='bold')
-        ax_scr.legend(loc='upper right', fontsize=self.style.legend_fontsize, ncol=4)
-        ax_scr.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
-        ax_scr.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize)
+        ax_tip.legend(loc='upper right', fontsize=self.style.legend_fontsize, ncol=4)
+        ax_tip.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
 
-        for m, label, color in [
-            (m_pid,  'PID',      ControllerColors.PID),
-            (m_fbl,  'FBL',      ControllerColors.FBL),
-            (m_ndob, 'FBL+NDOB', ControllerColors.FBL_NDOB),
+        # Panel 2: Elevation (Tilt)
+        for m, label, color, ls in [
+            (m_pid,  'PID',      ControllerColors.PID,      '-'),
+            (m_fbl,  'FBL',      ControllerColors.FBL,      '-'),
+            (m_ndob, 'FBL+NDOB', ControllerColors.FBL_NDOB, '-'),
         ]:
-            ax_bias.plot(m.time, m.abs_fsm_tip  * 1e3, color=color, lw=lw, alpha=alpha, label=f'{label} |θ_tip|')
-            ax_bias.plot(m.time, m.abs_fsm_tilt * 1e3, color=color, lw=lw, alpha=alpha * 0.5, linestyle='--')
+            ax_tilt.plot(m.time, m.scr_timeseries_tilt, color=color, lw=lw,
+                         alpha=alpha, linestyle=ls, label=f'{label}')
 
-        ax_bias.axhline(lim_mrad, color='red', lw=2.0, linestyle='--', label=rf'$\theta_{{max}}$ = {lim_mrad:.1f} mrad')
-        ax_bias.axhline(m_ndob.s_bias_tip * 1e3, color=ControllerColors.FBL_NDOB, lw=1.5, linestyle=':', alpha=0.9,
-                        label=rf'NDOB $\bar{{S}}_{{bias}}$ = {m_ndob.s_bias_tip_mrad:.3f} mrad')
-        dsm_lower = (m_ndob.s_bias_tip + 3 * m_ndob.sigma_jitter_tip) * 1e3
-        ax_bias.fill_between(m_ndob.time, dsm_lower, lim_mrad, alpha=0.12, color='green', label='DSM headroom (FBL+NDOB)')
-        ax_bias.set_ylim(bottom=0.0, top=lim_mrad * 1.25)
-        ax_bias.set_ylabel(r'$|\theta_{FSM}|$ [mrad]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax_bias.set_title(r'Instantaneous Stroke Load $|\theta_{FSM}(t)|$ vs Physical Limit $\theta_{max}$',
+        ax_tilt.axhline(100.0, color='red', lw=1.5, linestyle=':', label='Saturation Limit')
+        
+        # Calculate upper y-limit based on actual max data
+        max_tilt = max([np.max(m.scr_timeseries_tilt) for m in [m_pid, m_fbl, m_ndob]] + [110.0])
+        ax_tilt.axhspan(100.0, max_tilt * 1.05, alpha=0.07, color='red')
+        ax_tilt.axhspan(0.0, 80.0, alpha=0.04, color='green')
+        ax_tilt.set_ylim(bottom=0.0, top=max_tilt * 1.05)
+        ax_tilt.set_ylabel('Utilization Ratio [%]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
+        ax_tilt.set_title(r'(b) Elevation Axis (Tilt) — Instantaneous Stroke Utilization $\left( \frac{|\theta_{FSM}(t)|}{\Theta_{max}} \right)$',
                           fontsize=self.style.title_fontsize, fontweight='bold')
-        ax_bias.legend(loc='upper right', fontsize=self.style.legend_fontsize, ncol=3)
-        ax_bias.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
-        ax_bias.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize)
+        # Use same legend for consistency
+        ax_tilt.legend(loc='upper right', fontsize=self.style.legend_fontsize, ncol=4)
+        ax_tilt.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
+        ax_tilt.set_xlabel('Time [s]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
 
         return fig
-
     # ─────────────────────────────────────────────────────────────────────────
     def _plot_stroke_margin_summary(self) -> plt.Figure:
         """Figure 15: Dynamic Stroke Margin and Stroke Consumption Summary.
@@ -1433,24 +1444,34 @@ class ResearchComparisonPlotter:
             t = np.asarray(log_arrays['time'])
             return float(np.median(np.diff(t))) if len(t) > 1 else 1e-4
 
+        def _get_link_active(log_arrays):
+            """Extract is_beam_on_sensor as a numpy bool array, or None."""
+            raw = log_arrays.get('is_beam_on_sensor', None)
+            if raw is not None:
+                return np.asarray(raw, dtype=bool)
+            return None
+
         try:
             m_pid = calculator.compute(
                 time=np.asarray(self._results_pid['log_arrays']['time']),
                 fsm_tip=np.asarray(self._results_pid['log_arrays']['fsm_tip']),
                 fsm_tilt=np.asarray(self._results_pid['log_arrays']['fsm_tilt']),
                 dt=_infer_dt(self._results_pid['log_arrays']),
+                link_active=_get_link_active(self._results_pid['log_arrays']),
             )
             m_fbl = calculator.compute(
                 time=np.asarray(self._results_fbl['log_arrays']['time']),
                 fsm_tip=np.asarray(self._results_fbl['log_arrays']['fsm_tip']),
                 fsm_tilt=np.asarray(self._results_fbl['log_arrays']['fsm_tilt']),
                 dt=_infer_dt(self._results_fbl['log_arrays']),
+                link_active=_get_link_active(self._results_fbl['log_arrays']),
             )
             m_ndob = calculator.compute(
                 time=np.asarray(self._results_ndob['log_arrays']['time']),
                 fsm_tip=np.asarray(self._results_ndob['log_arrays']['fsm_tip']),
                 fsm_tilt=np.asarray(self._results_ndob['log_arrays']['fsm_tilt']),
                 dt=_infer_dt(self._results_ndob['log_arrays']),
+                link_active=_get_link_active(self._results_ndob['log_arrays']),
             )
         except Exception as exc:
             fig, ax = plt.subplots(figsize=self.style.get_figure_size('2x1'), constrained_layout=self._get_layout_mode())
@@ -1458,46 +1479,126 @@ class ResearchComparisonPlotter:
             ax.set_axis_off()
             return fig
 
-        fig = plt.figure(figsize=self.style.get_figure_size('2x1'), constrained_layout=self._get_layout_mode())
-        gs = fig.add_gridspec(2, 1, height_ratios=[1.0, 1.3], hspace=0.45)
-        ax_dsm   = fig.add_subplot(gs[0])
-        ax_table = fig.add_subplot(gs[1])
+        fig = plt.figure(figsize=self.style.get_figure_size('1x1'), constrained_layout=self._get_layout_mode())
+        ax_bar = fig.add_subplot(111)
 
         ctrl_labels = ['PID', 'FBL', 'FBL+NDOB']
-        dsm_tip_vals  = np.array([m_pid.dsm_tip_mrad,  m_fbl.dsm_tip_mrad,  m_ndob.dsm_tip_mrad])
-        dsm_tilt_vals = np.array([m_pid.dsm_tilt_mrad, m_fbl.dsm_tilt_mrad, m_ndob.dsm_tilt_mrad])
+        scr_tip_vals  = np.array([m_pid.scr_tip,  m_fbl.scr_tip,  m_ndob.scr_tip])
+        scr_tilt_vals = np.array([m_pid.scr_tilt, m_fbl.scr_tilt, m_ndob.scr_tilt])
         bar_colors = [ControllerColors.PID, ControllerColors.FBL, ControllerColors.FBL_NDOB]
 
         x = np.arange(len(ctrl_labels))
         bar_w = 0.35
-        bars_tip  = ax_dsm.bar(x - bar_w / 2, dsm_tip_vals,  bar_w,
+        bars_tip  = ax_bar.bar(x - bar_w / 2, scr_tip_vals,  bar_w,
                                color=bar_colors, alpha=0.85, edgecolor='black', linewidth=1.2, label='Tip')
-        bars_tilt = ax_dsm.bar(x + bar_w / 2, dsm_tilt_vals, bar_w,
+        bars_tilt = ax_bar.bar(x + bar_w / 2, scr_tilt_vals, bar_w,
                                color=bar_colors, alpha=0.50, edgecolor='black', linewidth=1.2, hatch='///', label='Tilt')
-        ax_dsm.axhline(0, color='red', lw=2.0, linestyle='--', label='Saturation Boundary')
-        ax_dsm.set_xticks(x)
-        ax_dsm.set_xticklabels(ctrl_labels, fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax_dsm.set_ylabel('DSM [mrad]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
-        ax_dsm.set_title('Dynamic Stroke Margin (DSM)\nPositive = Link Safe  |  Negative = Link Dropout Risk',
+        ax_bar.axhline(100.0, color='red', lw=2.0, linestyle='--', label='Saturation Boundary (100%)')
+        ax_bar.set_xticks(x)
+        ax_bar.set_xticklabels(ctrl_labels, fontsize=self.style.axis_label_fontsize, fontweight='bold')
+        ax_bar.set_ylabel('SCR_RMS [%]', fontsize=self.style.axis_label_fontsize, fontweight='bold')
+        ax_bar.set_title('RMS Stroke Consumption Ratio (SCR_RMS)',
                          fontsize=self.style.title_fontsize, fontweight='bold')
         for bar in list(bars_tip) + list(bars_tilt):
             h = bar.get_height()
-            ax_dsm.annotate(
-                f'{h:.2f}',
+            ax_bar.annotate(
+                f'{h:.1f}%',
                 xy=(bar.get_x() + bar.get_width() / 2, h),
-                xytext=(0, 4 if h >= 0 else -12),
+                xytext=(0, 4),
                 textcoords='offset points',
                 ha='center', fontsize=9, fontweight='bold',
-                color='#1a7a1a' if h > 0 else '#cc0000'
+                color='black' if h <= 100.0 else '#cc0000'
             )
-        ax_dsm.legend(loc='best', fontsize=self.style.legend_fontsize, ncol=1)
-        ax_dsm.grid(True, axis='y', alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
+        ax_bar.legend(loc='best', fontsize=self.style.legend_fontsize, ncol=1)
+        ax_bar.grid(True, axis='y', alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
+
+        return fig
+
+    def _plot_benchmark_table(self) -> plt.Figure:
+        """Figure 16: Stroke Consumption Benchmark Results summary table."""
+        stroke_lim_arr = self._results_ndob['log_arrays'].get('fsm_stroke_limit_rad', None)
+        theta_max = float(stroke_lim_arr[0]) if stroke_lim_arr is not None else 0.010
+
+        calculator = StrokeMetrics(theta_max=theta_max, jitter_cutoff_hz=50.0, filter_order=4)
+
+        def _infer_dt(log_arrays):
+            t = np.asarray(log_arrays['time'])
+            return float(np.median(np.diff(t))) if len(t) > 1 else 1e-4
+
+        def _get_link_active(log_arrays):
+            raw = log_arrays.get('is_beam_on_sensor', None)
+            if raw is not None:
+                return np.asarray(raw, dtype=bool)
+            return None
+
+        # Helper for Post-FSM residuals
+        _to_urad = 1e6
+        def _get_residual(results, key):
+            arr = results['log_arrays'].get(key, None)
+            if arr is None:
+                los  = np.array(results['log_arrays'].get('los_error_x' if 'x' in key else 'los_error_y', [0]))
+                fsm  = np.array(results['log_arrays'].get('fsm_tip' if 'x' in key else 'fsm_tilt', [0]))
+                return los - 2.0 * fsm
+            return np.array(arr)
+
+        def _calc_rms(results, t_arr, key):
+            res = _get_residual(results, key) * _to_urad
+            t = np.array(t_arr)
+            if len(t) > 10:
+                steady_start = t[-1] * 0.5  # Last 50%
+                mask = t >= steady_start
+                if mask.sum() > 0:
+                    return float(np.sqrt(np.mean(res[mask]**2)))
+            return 0.0
+
+        rms_pid_x = _calc_rms(self._results_pid, self._t_pid, 'fsm_residual_error_x')
+        rms_fbl_x = _calc_rms(self._results_fbl, self._t_fbl, 'fsm_residual_error_x')
+        rms_ndob_x = _calc_rms(self._results_ndob, self._t_ndob, 'fsm_residual_error_x')
+
+        rms_pid_y = _calc_rms(self._results_pid, self._t_pid, 'fsm_residual_error_y')
+        rms_fbl_y = _calc_rms(self._results_fbl, self._t_fbl, 'fsm_residual_error_y')
+        rms_ndob_y = _calc_rms(self._results_ndob, self._t_ndob, 'fsm_residual_error_y')
+
+        try:
+            m_pid = calculator.compute(
+                time=np.asarray(self._results_pid['log_arrays']['time']),
+                fsm_tip=np.asarray(self._results_pid['log_arrays']['fsm_tip']),
+                fsm_tilt=np.asarray(self._results_pid['log_arrays']['fsm_tilt']),
+                dt=_infer_dt(self._results_pid['log_arrays']),
+                link_active=_get_link_active(self._results_pid['log_arrays']),
+            )
+            m_fbl = calculator.compute(
+                time=np.asarray(self._results_fbl['log_arrays']['time']),
+                fsm_tip=np.asarray(self._results_fbl['log_arrays']['fsm_tip']),
+                fsm_tilt=np.asarray(self._results_fbl['log_arrays']['fsm_tilt']),
+                dt=_infer_dt(self._results_fbl['log_arrays']),
+                link_active=_get_link_active(self._results_fbl['log_arrays']),
+            )
+            m_ndob = calculator.compute(
+                time=np.asarray(self._results_ndob['log_arrays']['time']),
+                fsm_tip=np.asarray(self._results_ndob['log_arrays']['fsm_tip']),
+                fsm_tilt=np.asarray(self._results_ndob['log_arrays']['fsm_tilt']),
+                dt=_infer_dt(self._results_ndob['log_arrays']),
+                link_active=_get_link_active(self._results_ndob['log_arrays']),
+            )
+        except Exception as exc:
+            fig, ax = plt.subplots(figsize=self.style.get_figure_size('1x1'), constrained_layout=self._get_layout_mode())
+            ax.text(0.5, 0.5, f'Stroke Summary unavailable:\n{exc}', ha='center', va='center', transform=ax.transAxes)
+            ax.set_axis_off()
+            return fig
+
+        fig = plt.figure(figsize=self.style.get_figure_size('1x1'), constrained_layout=self._get_layout_mode())
+        ax_table = fig.add_subplot(111)
 
         ax_table.set_axis_off()
         table_rows = [
-            [r'SCR Tip [%]',
+            [r'Post-FSM Residual Tip [µrad]',
+             f'{rms_pid_x:.2f}', f'{rms_fbl_x:.2f}', f'{rms_ndob_x:.2f}'],
+            [r'Post-FSM Residual Tilt [µrad]',
+             f'{rms_pid_y:.2f}', f'{rms_fbl_y:.2f}', f'{rms_ndob_y:.2f}'],
+            [r'SCR_{rms} Tip [%]',
              f'{m_pid.scr_tip:.1f}', f'{m_fbl.scr_tip:.1f}', f'{m_ndob.scr_tip:.1f}'],
-            [r'SCR Tilt [%]',
+            [r'SCR_{rms} Tilt [%]',
              f'{m_pid.scr_tilt:.1f}', f'{m_fbl.scr_tilt:.1f}', f'{m_ndob.scr_tilt:.1f}'],
             [r'$S_{bias}$ Tip [mrad]',
              f'{m_pid.s_bias_tip_mrad:.3f}', f'{m_fbl.s_bias_tip_mrad:.3f}', f'{m_ndob.s_bias_tip_mrad:.3f}'],
@@ -1509,10 +1610,10 @@ class ResearchComparisonPlotter:
              f'{m_pid.dsm_tip_mrad:.3f}', f'{m_fbl.dsm_tip_mrad:.3f}', f'{m_ndob.dsm_tip_mrad:.3f}'],
             [r'DSM Tilt [mrad]',
              f'{m_pid.dsm_tilt_mrad:.3f}', f'{m_fbl.dsm_tilt_mrad:.3f}', f'{m_ndob.dsm_tilt_mrad:.3f}'],
-            [r'Link Safe (Tip)',
-             '✓' if m_pid.is_link_safe_tip  else '✗',
-             '✓' if m_fbl.is_link_safe_tip  else '✗',
-             '✓' if m_ndob.is_link_safe_tip else '✗'],
+            #[r'Link Safe (Tip)',
+            # '✓' if m_pid.is_link_safe_tip  else '✗',
+            # '✓' if m_fbl.is_link_safe_tip  else '✗',
+            # '✓' if m_ndob.is_link_safe_tip else '✗'],
         ]
         col_labels = ['Metric', 'PID', 'FBL', 'FBL+NDOB']
         col_widths = [0.25, 0.20, 0.20, 0.25]
@@ -1542,7 +1643,7 @@ class ResearchComparisonPlotter:
     def _save_all_figures(self) -> None:
         """Save all generated figures to disk in journal-quality PDF format."""
         mode_str = "interactive" if self.interactive else "static"
-        print(f"\n[OK] Generated 15 research-quality {mode_str} figures (300 DPI, LaTeX labels)")
+        print(f"\n[OK] Generated 16 research-quality {mode_str} figures (300 DPI, LaTeX labels)")
         print("Saving figures to disk in journal-quality PDF format...")
         
         figure_names = {
@@ -1561,6 +1662,7 @@ class ResearchComparisonPlotter:
             'fig13_statistics': 'fig13_disturbance_statistics.pdf',
             'fig14_stroke_metrics': 'fig14_stroke_consumption_ratio.pdf',
             'fig15_stroke_summary': 'fig15_stroke_margin_summary.pdf',
+            'fig16_benchmark_table': 'fig16_benchmark_table_results.pdf',
         }
         
         for key, filename in figure_names.items():
@@ -1589,7 +1691,7 @@ class ResearchComparisonPlotter:
                 except Exception as e:
                     print(f"  [ERROR] Failed to save {filename}: {e}")
         
-        print(f"  [OK] Saved 15 PDF figures to {self.style.output_dir.absolute()}/")
+        print(f"  [OK] Saved 16 PDF figures to {self.style.output_dir.absolute()}/")
         print("  [OK] Format: PDF (vector), 300 DPI, bbox='tight' (journal-ready)")
         print("FIGURE GENERATION COMPLETE")
         print("=" * 70)
