@@ -865,11 +865,11 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     print("-" * 80)
     
     config_fl = SimulationConfig(
-        dt_sim=0.001,
+        dt_sim=0.0001,
         dt_coarse=0.01,
         dt_fine=0.00001,
         dt_qpd=0.00001,
-        log_period=0.0001,
+        log_period=0.001,
         seed=42,
         target_az=np.deg2rad(target_az_deg),
         target_el=np.deg2rad(target_el_deg),
@@ -1112,7 +1112,7 @@ if __name__ == '__main__':
             'start_time': 2.0             # Delay onset [s]
         },
         'vibration': {
-            'enabled': True,
+            'enabled': False,
             'modal_frequencies': [15.0, 45.0, 80.0],  # Structural modes [Hz]
             'modal_dampings': [0.02, 0.015, 0.01],    # Low damping typical
             'modal_amplitudes': [2e-3, 7e-4, 4e-4],   # PSD amplitudes [(m/s²)²/Hz]
@@ -1120,7 +1120,7 @@ if __name__ == '__main__':
             'start_time': 0
         },
         'structural_noise': {
-            'enabled': True,
+            'enabled': False,
             'std': 0.01,        # Noise intensity σ [N·m]
             'freq_low': 100.0,   # Lower cutoff [Hz]
             'freq_high': 500.0   # Upper cutoff [Hz]
