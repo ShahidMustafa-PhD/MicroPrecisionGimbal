@@ -2,6 +2,9 @@
 NdobFbl MVC Model - Encapsulates the 3-Way Controller Comparison (PID vs FBL vs FBL+NDOB).
 """
 
+import json
+import re
+import os
 import copy
 import numpy as np
 from typing import Dict
@@ -16,18 +19,28 @@ class NdobFbl:
     """
 
     def __init__(self):
-        self.default_config = self._load_json_config()
+        base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        config_path = os.path.join(base_dir, 'data', 'config.jsonc')
+        if not os.path.exists(config_path):
+            config_path = os.path.join('lasercom_digital_twin', 'data', 'config.jsonc')
+        
+        self.default_config = self._load_commented_json(config_path)
 
-    def _load_json_config(self) -> dict:
-        import json
-        import os
-        json_path = os.path.join("lasercom_digital_twin", "data", "config.json")
-        if not os.path.exists(json_path):
+    def _load_commented_json(self, filepath: str) -> dict:
+        """Loads a JSON file, stripping C-style (//) comments first."""
+        if not os.path.exists(filepath):
             return {}
-        with open(json_path, 'r') as f:
-            data = json.load(f)
-        # Strip pseudo comments
-        return {k: v for k, v in data.items() if not k.startswith("//")}
+            
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Regular expression to remove // comments, ignoring // inside strings
+        comment_re = re.compile(
+            r'(^)?[^\S\n]*/(?:\*(.*?)\*/[^\S\n]*|/[^\n]*)($)?',
+            re.DOTALL | re.MULTILINE
+        )
+        content_no_comments = comment_re.sub('', content)
+        return json.loads(content_no_comments)
 
     def run_analysis(self, config: dict, progress_callback=None) -> dict:
         """
@@ -108,7 +121,10 @@ class NdobFbl:
 
     def _build_pid_config(self, base_cfg: dict) -> SimulationConfig:
         """Builds the SimulationConfig for standard PID based on GUI inputs."""
-        cfg = SimulationConfig(**{k: v for k, v in base_cfg.items() if k != "_gui_duration"})
+        # Filter out keys that aren't in SimulationConfig dataclass (like 'duration' and '_gui_duration')
+        excluded_keys = ["_gui_duration", "duration"]
+        cfg_args = {k: v for k, v in base_cfg.items() if k not in excluded_keys}
+        cfg = SimulationConfig(**cfg_args)
         
         cfg.use_feedback_linearization = False
         cfg.enable_plotting = False
@@ -128,7 +144,9 @@ class NdobFbl:
 
     def _build_fbl_config(self, base_cfg: dict) -> SimulationConfig:
         """Builds the SimulationConfig for standard FBL based on GUI inputs."""
-        cfg = SimulationConfig(**{k: v for k, v in base_cfg.items() if k != "_gui_duration"})
+        excluded_keys = ["_gui_duration", "duration"]
+        cfg_args = {k: v for k, v in base_cfg.items() if k not in excluded_keys}
+        cfg = SimulationConfig(**cfg_args)
         
         cfg.use_feedback_linearization = True
         cfg.use_direct_state_feedback = False

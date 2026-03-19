@@ -5,7 +5,7 @@ Responsibilities
 ----------------
 1. Own the ``QThread`` + ``SimulationWorker`` lifecycle.
 2. Connect config-panel signals (start/stop) → worker.
-3. Connect worker signals (telemetry, progress, finished) → dashboard + console.
+3. Connect worker signals (progress, finished) → console.
 4. Ensure clean thread shutdown on application exit.
 """
 

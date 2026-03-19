@@ -144,13 +144,15 @@ class PlotStyleConfig:
     """
     
     # Figure sizes (width, height) in inches
+    # Hard-enforced unified standard size for all journal outputs
     figure_sizes: Dict[str, Tuple[float, float]] = field(default_factory=lambda: {
-        '2x1': (10, 7),      # Standard 2-row vertical
-        '2x2': (10, 7),      # 2x2 grid
-        '1x2': (10, 7),      # Side-by-side
-        '3x1': (10, 7),      # 3-row vertical
-        '3x1_tall': (10, 9), # Extended 3-row
-        'double_column': (14, 10),  # IEEE double column
+        '1x1': (10.0, 8.0),
+        '2x1': (10.0, 8.0),
+        '2x2': (10.0, 8.0),
+        '1x2': (10.0, 8.0),
+        '3x1': (10.0, 8.0),
+        '3x1_tall': (10.0, 8.0),
+        'double_column': (10.0, 8.0),
     })
     
     # Resolution

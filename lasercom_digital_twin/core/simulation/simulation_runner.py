@@ -28,6 +28,7 @@ import numpy as np
 from typing import Dict, Optional, Tuple, List
 from dataclasses import dataclass, field
 import time
+import os
 from collections import defaultdict
 import threading
 
@@ -683,7 +684,19 @@ class DigitalTwinRunner:
             # Load tuned gains from FSM_control_design.py or use defaults
             bandwidth_hz = self.config.fsm_controller_config.get('bandwidth_hz', 150.0) if self.config.fsm_controller_config else 150.0
             #self.fsm_pid = create_fsm_controller_from_design(bandwidth_hz=bandwidth_hz) # Factory function to create object of NonlinearDisturbanceObserver:
-            json_file_path = "fsm_controller_gains.json" 
+            # Look for the gains file in standard locations
+            possible_paths = [
+                "fsm_controller_gains.json",
+                "lasercom_digital_twin/data/fsm_controller_gains.json",
+                "config/fsm_controller_gains.json"
+            ]
+            
+            json_file_path = "fsm_controller_gains.json" # Default
+            for p in possible_paths:
+                if os.path.exists(p):
+                    json_file_path = p
+                    break
+                    
             self.fsm_pid = create_fsm_controller_from_design(json_path=json_file_path)
             print(f"INFO: FSM PIDF controller initialized (Bandwidth: {bandwidth_hz:.0f} Hz)")
         else:
@@ -1030,6 +1043,25 @@ class DigitalTwinRunner:
         self.state.los_error_x = error_az
         self.state.los_error_y = error_el
         
+        # FOV Gating
+        qpd_fov_rad = self.config.qpd_config.get('linear_range', 0.015) if self.config.qpd_config else 0.015
+        
+        if self.config.target_enabled:
+            coarse_error_mag = np.sqrt(error_az**2 + error_el**2)
+            is_beam_on_sensor = coarse_error_mag < qpd_fov_rad
+        else:
+            is_beam_on_sensor = True
+            
+        self.state.is_beam_on_sensor = is_beam_on_sensor
+        
+        if not is_beam_on_sensor:
+            # Beam is off sensor: No optical signal
+            self.state.z_qpd_nes_x = 0.0
+            self.state.z_qpd_nes_y = 0.0
+            self.state.fsm_residual_error_x = error_az
+            self.state.fsm_residual_error_y = error_el
+            return
+            
         # Apply FSM correction to beam pointing
         # FSM deflects beam by 2× mirror angle (optical doubling)
         corrected_error_az = error_az - 2.0 * self.state.fsm_tip
@@ -1249,22 +1281,8 @@ class DigitalTwinRunner:
         """
         dt = self.config.dt_fine
         
-        # ====================================================================
-        # STEP 0: FOV GATING
-        # ====================================================================
-        qpd_fov_rad = self.config.qpd_config.get('linear_range', 0.015) if self.config.qpd_config else 0.015
-        vib_az, vib_el = self._compute_vibration(self.time)
-        
-        if self.config.target_enabled:
-            coarse_error_az = self.config.target_az - (self.state.q_az + vib_az)
-            coarse_error_el = self.config.target_el - (self.state.q_el + vib_el)
-            coarse_error_mag = np.sqrt(coarse_error_az**2 + coarse_error_el**2)
-            is_beam_on_sensor = coarse_error_mag < qpd_fov_rad
-        else:
-            is_beam_on_sensor = True
-
-        # Store for telemetry logging (used by Functional Saturation Override)
-        self.state.is_beam_on_sensor = is_beam_on_sensor
+        # FOV State is updated in _update_qpd_measurement prior to this call
+        is_beam_on_sensor = self.state.is_beam_on_sensor
 
         # ====================================================================
         # STEP 1: ERROR SENSING
@@ -1328,7 +1346,11 @@ class DigitalTwinRunner:
         # STEP 4: STATE-SPACE PROPAGATION (RK4 Integration)
         # ====================================================================
         try:
-            y_output = self.fsm_dynamics.step(u_saturated, dt)
+            if is_beam_on_sensor:
+                y_output = self.fsm_dynamics.step(u_saturated, dt)
+            else:
+                self.fsm_dynamics.reset()
+                y_output = np.zeros(2)
         except Exception as e:
             print(f"WARNING: FSM dynamics integration failed: {e}")
             y_output = np.array([self.state.fsm_tip, self.state.fsm_tilt])
@@ -1602,6 +1624,9 @@ class DigitalTwinRunner:
         This method handles multi-rate execution, dynamics integration,
         sensor sampling, estimation, and control updates for one dt_sim step.
         """
+        # 1. Update master time FIRST
+        self.iteration += 1
+        self.time = self.iteration * self.config.dt_sim
         # 0. Update time-varying targets if enabled
         self._update_targets(self.time)
 
@@ -1623,12 +1648,16 @@ class DigitalTwinRunner:
             self._update_fine_controller()
             self.last_fine_update = self.time
         
+        # 7. CRITICAL FIX: Recompute the true optical residual AFTER the FSM moves
+        # so that logging captures synchronous data.
+        self.state.fsm_residual_error_x = self.state.los_error_x - 2.0 * self.state.fsm_tip
+        self.state.fsm_residual_error_y = self.state.los_error_y - 2.0 * self.state.fsm_tilt
         # 5. Log data
         self._log_data()
         
         # Increment internal time and iteration
-        self.iteration += 1
-        self.time = self.iteration * self.config.dt_sim
+        #self.iteration += 1
+        #self.time = self.iteration * self.config.dt_sim
         
         return self.state
 
@@ -2319,6 +2348,13 @@ class DigitalTwinRunner:
         # Reset state
         self.state = SimulationState()
         
+        # Clear persistent target generator states
+        if hasattr(self, '_base_target_az'):
+            delattr(self, '_base_target_az')
+        if hasattr(self, '_base_target_el'):
+            delattr(self, '_base_target_el')
+        if hasattr(self, '_hybridsig_hold'):
+            delattr(self, '_hybridsig_hold')
         # Clear logs
         self.log_data.clear()
 

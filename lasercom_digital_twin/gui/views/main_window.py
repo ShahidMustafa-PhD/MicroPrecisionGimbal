@@ -4,8 +4,8 @@ Main application window with dockable panel layout.
 Layout
 ------
 - Left dock   : ``ConfigPanel``   — controller & disturbance settings
-- Center      : ``TelemetryDashboard`` — live readouts + plot placeholders
-- Bottom dock : ``ConsoleLogger`` — timestamped status/telemetry log
+- Center      : ``InteractivePlotViewer`` — plot placeholders
+- Bottom dock : ``ConsoleLogger`` — timestamped status log
 
 All three panels are ``QDockWidget`` instances so the user can rearrange,
 float, or close them at will.

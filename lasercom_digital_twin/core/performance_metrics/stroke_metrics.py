@@ -343,15 +343,25 @@ class StrokeMetrics:
 
         # ── S_bias ───────────────────────────────────────────────────────
         T = time[-1] - time[0]
-        s_bias_tip = float(_trapz(abs_tip_functional, x=time) / T) if T > 0 else 0.0
-        s_bias_tilt = float(_trapz(abs_tilt_functional, x=time) / T) if T > 0 else 0.0
-
+       # s_bias_tip = float(_trapz(abs_tip_functional, x=time) / T) if T > 0 else 0.0
+       # s_bias_tilt = float(_trapz(abs_tilt_functional, x=time) / T) if T > 0 else 0.0
+        # ── S_bias ───────────────────────────────────────────────────────
+        T = time[-1] - time[0]
+        if T > 0:
+            # CRITICAL CORRECTION: Integrate the signed raw signal to allow 
+            # zero-mean jitter to cancel out, then take the absolute value 
+            # of the resulting DC offset.
+            s_bias_tip = abs(float(_trapz(fsm_tip, x=time) / T))
+            s_bias_tilt = abs(float(_trapz(fsm_tilt, x=time) / T))
+        else:
+            s_bias_tip = 0.0
+            s_bias_tilt = 0.0
         # ── σ_jitter (High-pass filter, zero-phase) ───────────────────────
         # CRITICAL PHYSICS LOGIC: Use the RAW fsm_tip/tilt here! The override injects 
         # theta_max square-wave artifacts that would violently destabilize the Butterworth 
         # High-Pass filter and artificially inflate sigma_jitter far beyond physical reality.
-        sigma_jitter_tip = self._compute_jitter_sigma(fsm_tip, dt)
-        sigma_jitter_tilt = self._compute_jitter_sigma(fsm_tilt, dt)
+        sigma_jitter_tip = self._compute_jitter_sigma(fsm_tip, dt, link_active)
+        sigma_jitter_tilt = self._compute_jitter_sigma(fsm_tilt, dt, link_active)
 
         # ── DSM ──────────────────────────────────────────────────────────
         dsm_tip = self.theta_max - (s_bias_tip + 3.0 * sigma_jitter_tip)
@@ -377,7 +387,7 @@ class StrokeMetrics:
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
-    def _compute_jitter_sigma(self, signal: np.ndarray, dt: float) -> float:
+    def _compute_jitter_sigma(self, signal: np.ndarray, dt: float, link_active: Optional[np.ndarray] = None) -> float:
         """
         Isolate and compute the standard deviation of the high-frequency
         component of `signal` using a zero-phase Butterworth high-pass filter.
@@ -390,13 +400,19 @@ class StrokeMetrics:
         padlen = 3 * (self.filter_order + 1)
 
         if normalized_cutoff >= 1.0 or len(signal) <= padlen:
+            if link_active is not None and np.any(link_active):
+                return float(np.std(signal[link_active]))
             return float(np.std(signal))
 
         try:
             b, a = butter(self.filter_order, normalized_cutoff, btype='high', analog=False)
             hf_signal = filtfilt(b, a, signal)
+            if link_active is not None and np.any(link_active):
+                return float(np.std(hf_signal[link_active]))
             return float(np.std(hf_signal))
         except Exception:
+            if link_active is not None and np.any(link_active):
+                return float(np.std(signal[link_active]))
             return float(np.std(signal))
 
     @staticmethod

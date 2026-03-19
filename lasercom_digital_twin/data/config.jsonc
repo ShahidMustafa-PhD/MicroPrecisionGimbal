@@ -1,0 +1,272 @@
+{
+    // ==========================================================================
+    // TIMING & EXECUTION CONFIGURATION
+    // ==========================================================================
+    "dt_sim": 0.001, // Physics timestep [s] (1 ms)
+    "dt_fine": 0.0001, // FSM control rate [s] (0.1 ms = 10 kHz, matches gains design)
+    "dt_coarse": 0.010, // Coarse control rate [s] (10 ms)
+    "dt_encoder": 0.001, // Encoder sample rate [s] (1 ms)
+    "dt_gyro": 0.001, // Gyro sample rate [s] (1 ms)
+    "dt_qpd": 0.0001, // QPD sample rate [s] (0.1 ms = 10 kHz)
+    "log_period": 0.001, // Data logging rate [s] (1 ms)
+    "enable_visualization": false, // Set True to enable MuJoCo 3D viewer
+    "enable_plotting": true, // Enable automatic plotting at completion
+    "real_time_factor": 0.0, // 0.0 = fast-as-possible, 1.0 = real-time clock pacing
+    "viewer_fps": 30.0, // Viewer refresh rate [Hz]
+    "seed": 42, // Deterministic RNG seed
+    // ==========================================================================
+    // TARGET TRAJECTORY CONFIGURATION
+    // ==========================================================================
+    "target_az": 0.0, // Base target azimuth [rad]
+    "target_el": 0.0, // Base target elevation [rad]
+    "target_enabled": true,
+    "target_type": "hybridsig", // Options: 'constant', 'square', 'sine', 'cosine', 'hybridsig'
+    "target_amplitude": 90.0, // Amplitude for time-varying signals [deg]
+    "target_period": 20.0, // Period for time-varying signals [s]
+    "target_reachangle": 5.0, // For hybridsig: target angle to hold after reaching it [deg]
+    // ==========================================================================
+    // CONTROL STRATEGY SELECTION
+    // ==========================================================================
+    "use_feedback_linearization": false, // Set True for FBL, False for Standard PID
+    "use_direct_state_feedback": false, // True to bypass EKF and use true state (for debugging only)
+    // ==========================================================================
+    // DYNAMICS & PLANT CONFIGURATION
+    // ==========================================================================
+    "dynamics_config": {
+        "pan_mass": 1.0, // [kg]
+        "tilt_mass": 0.5, // [kg]
+        "cm_r": 0.0, // Radial Center of Mass offset [m]
+        "cm_h": 0.0, // Vertical Center of Mass offset [m]
+        "gravity": 9.81, // [m/s²]
+        "friction_az": 0.1, // Viscous friction Azimuth [N·m/(rad/s)]
+        "friction_el": 0.1 // Viscous friction Elevation [N·m/(rad/s)]
+    },
+    "motor_config": {
+        "R": 2.0, // Motor resistance [Ohms]
+        "L": 0.01, // Motor inductance [H]. τ_e = L/R = 5ms
+        "K_t": 0.5, // Torque constant [N·m/A]
+        "K_e": 0.5, // Back-EMF constant [V/(rad/s)]
+        "tau_max": 10.0, // Saturation limit max [N·m]
+        "tau_min": -10.0, // Saturation limit min [N·m]
+        "cogging_amplitude": 0.0, // Cogging torque disabled by default for cleaner tuning
+        "cogging_frequency": 10.0,
+        "seed": 42
+    },
+    "fsm_config": {
+        // Vendor specifies internal state-space model:
+        // 'pi' (PZT, ±10mrad, 1kHz), 'newport' (VCA, ±26mrad, 140Hz), 'cedrat' (±25mrad, 100Hz)
+        "vendor": "pi"
+    },
+    // ==========================================================================
+    // SENSOR CONFIGURATION
+    // ==========================================================================
+    "encoder_config": {
+        "resolution_bits": 20,
+        "noise_std": 1e-6,
+        "bias": 0.0,
+        "seed": 44
+    },
+    "gyro_config": {
+        "arw_std": 1e-5, // Angle Random Walk
+        "bias_std": 1e-6,
+        "bias_instability": 1e-7,
+        "latency": 0.002, // 2ms sensor delay
+        "seed": 46
+    },
+    "qpd_config": {
+        "sensitivity": 2000.0, // [V/rad]
+        "linear_range": 0.008, // Faster Handover Gating (~0.45 deg)
+        "noise_std": 5e-7, // 500 nrad RMS realistic for 50mm terrestrial link
+        "bias_x": 0.0,
+        "bias_y": 0.0,
+        "nonlinearity_coeff": 100.0,
+        "spot_size_um": 100.0, // Defocused to 100µm to provide wide linear capture range
+        "seed": 48
+    },
+    // ==========================================================================
+    // ESTIMATOR (EKF) CONFIGURATION
+    // ==========================================================================
+    "estimator_config": {
+        "initial_state": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+        ],
+        // High Q (process noise) absorbs model errors. Low R (meas noise) trusts sensors.
+        "process_noise_std": [
+            1e-8,
+            1e-6,
+            1e-9,
+            1e-8,
+            1e-6,
+            1e-9,
+            1e-7,
+            1e-6,
+            1e-1,
+            1e-1
+        ],
+        "measurement_noise_std": [
+            1e-6,
+            1e-6,
+            1e-6,
+            1e-6,
+            1e-2,
+            1e-2
+        ]
+    },
+    // ==========================================================================
+    // CONTROLLER GAINS & TUNING
+    // ==========================================================================
+    "coarse_controller_config": {
+        "kp": [
+            3.514,
+            1.320
+        ], // Per-axis PID [Pan, Tilt]
+        "ki": [
+            15.464,
+            4.148
+        ], // Designed for 5 Hz bandwidth
+        "kd": [
+            0.293,
+            0.059418
+        ], // Corrected Kd values for double-integrator
+        "anti_windup_gain": 1.0,
+        "tau_rate_limit": 50.0,
+        "setpoint_filter_wn": 10.0,
+        "setpoint_filter_zeta": 0.7,
+        "tau_max": [
+            10.0,
+            10.0
+        ],
+        "tau_min": [
+            -10.0,
+            -10.0
+        ],
+        "enable_derivative": true
+    },
+    "feedback_linearization_config": {
+        // Design for ωn = 20 rad/s (3.2 Hz), ζ = 1.0 (critically damped)
+        // Kp = ωn² = 400, Kd = 2*ζ*ωn = 40
+        "kp": [
+            400.0,
+            800.0
+        ], // Position gain [1/s²]
+        "kd": [
+            40.0,
+            60.0
+        ], // Velocity gain [1/s] (critically damped)
+        "ki": [
+            50.0,
+            25.0
+        ], // Integral for residual disturbances (disable if NDOB used)
+        "enable_integral": true,
+        "tau_max": [
+            10.0,
+            10.0
+        ],
+        "tau_min": [
+            -10.0,
+            -10.0
+        ],
+        "friction_az": 0.1, // Matches plant friction for feedforward
+        "friction_el": 0.1,
+        "enable_disturbance_compensation": false
+    },
+    "fsm_controller_config": {
+        "use_pidf": true, // Uses derivative filtering and anti-windup
+        "bandwidth_hz": 150.0
+    },
+    "ndob_config": {
+        // NDOB tuning for dynamic friction compensation.
+        // Handles unknown/residual disturbances (reactive).
+        "enable": true,
+        "lambda_az": 70.0, // Moderate bandwidth (τ = 25ms, avoids instability >200)
+        "lambda_el": 90.0,
+        "d_max": 0.5 // Max allowable disturbance estimate [N·m]
+    },
+    // ==========================================================================
+    // OPTICS & ENVIRONMENT
+    // ==========================================================================
+    "optics_config": {
+        "focal_length_m": 0.20, // 200 mm short barrel for low moment of inertia
+        "aperture_diameter_m": 0.05, // 50 mm (2-inch clear aperture)
+        "wavelength_m": 1.55e-6, // 1550 nm Telecom/Eye-safe standard
+        "detector_size_um": 1000.0 // 1 mm x 1 mm InGaAs QPD
+    },
+    "frame_config": {
+        "site_latitude_deg": 35.0,
+        "epsilon_az": 0.0,
+        "epsilon_el": 0.0
+    },
+    "vibration_enabled": false,
+    "vibration_config": {
+        "start_time": 1.0,
+        "frequency_hz": 20.0,
+        "amplitude_rad": 5e-5,
+        "harmonics": [
+            [
+                1.0,
+                1.0
+            ],
+            [
+                2.5,
+                0.3
+            ], // Higher frequency harmonic
+            [
+                5.0,
+                0.1
+            ]
+        ]
+    },
+    "environmental_disturbance_enabled": true,
+    "environmental_disturbance_config": {
+        "seed": 42,
+        "wind": {
+            // Dryden/von Kármán wind turbulence (MIL-F-8785C compliant)
+            "enabled": true,
+            "start_time": 2.0, // Delay onset [s]
+            "mean_velocity": 8.0, // Mean wind speed V_mean [m/s]
+            "turbulence_intensity": 0.25, // σ_u/V_mean ratio (0.1=light, 0.2=moderate)
+            "scale_length": 200.0, // Turbulence scale L_u [m] (200m low alt)
+            "direction_deg": 45.0, // Wind direction (affects Az/El split)
+            "gimbal_area": 0.02,
+            "gimbal_arm": 0.15,
+            "drag_coefficient": 1.2
+        },
+        "vibration": {
+            // PSD-Based Structural Vibration Model (modal superposition)
+            "enabled": false,
+            "start_time": 0.0,
+            "modal_frequencies": [
+                15.0,
+                45.0,
+                80.0
+            ],
+            "modal_dampings": [
+                0.02,
+                0.015,
+                0.01
+            ],
+            "modal_amplitudes": [
+                0.002,
+                0.0007,
+                0.0004
+            ], // PSD amplitudes [(m/s²)²/Hz]
+            "inertia_coupling": 0.1, // Accel to torque coupling [N·m/(m/s²)]
+            "noise_floor_psd": 1e-6
+        },
+        "structural_noise": {
+            "enabled": false,
+            "std": 0.01, // Noise intensity RMS [N·m]
+            "freq_low": 100.0, // Lower bound [Hz]
+            "freq_high": 500.0 // Upper bound [Hz]
+        }
+    }
+}
