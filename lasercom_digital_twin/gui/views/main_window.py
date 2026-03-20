@@ -14,7 +14,7 @@ float, or close them at will.
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMainWindow, QDockWidget, QMenuBar, QMenu, QStatusBar
 
-from lasercom_digital_twin.gui.views.config_panel import ControlPanelWidget
+from lasercom_digital_twin.gui.views.dual_config_panel import DualConfigWidget
 from lasercom_digital_twin.gui.views.console_logger import ConsoleLogger
 from lasercom_digital_twin.gui.views.figure_viewer import InteractivePlotViewer
 
@@ -40,7 +40,7 @@ class DigitalTwinMainWindow(QMainWindow):
         self.setDockNestingEnabled(True)
 
         # ---- Create child widgets ----
-        self.control_panel = ControlPanelWidget()
+        self.control_panel = DualConfigWidget()
         self.console_logger = ConsoleLogger()
         self.figure_viewer = InteractivePlotViewer()
 

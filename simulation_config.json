@@ -52,14 +52,14 @@
     "gyro_config": {
         "arw_std": 1e-05,
         "bias_std": 1e-06,
-        "bias_instability": 0.0,
+        "bias_instability": 1e-07,
         "latency": 0.002,
         "seed": 46
     },
     "qpd_config": {
         "sensitivity": 2000.0,
         "linear_range": 0.008,
-        "noise_std": 0.0,
+        "noise_std": 5e-07,
         "bias_x": 0.0,
         "bias_y": 0.0,
         "nonlinearity_coeff": 100.0,
@@ -235,6 +235,5 @@
             "freq_low": 100.0,
             "freq_high": 500.0
         }
-    },
-    "_gui_duration": 5.0
+    }
 }
