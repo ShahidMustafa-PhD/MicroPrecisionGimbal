@@ -121,9 +121,11 @@ class NdobFbl:
 
     def _build_pid_config(self, base_cfg: dict) -> SimulationConfig:
         """Builds the SimulationConfig for standard PID based on GUI inputs."""
-        # Filter out keys that aren't in SimulationConfig dataclass (like 'duration' and '_gui_duration')
+        # Use deepcopy to ensure nested dicts are independent
+        cfg_data = copy.deepcopy(base_cfg)
+        
         excluded_keys = ["_gui_duration", "duration"]
-        cfg_args = {k: v for k, v in base_cfg.items() if k not in excluded_keys}
+        cfg_args = {k: v for k, v in cfg_data.items() if k not in excluded_keys}
         cfg = SimulationConfig(**cfg_args)
         
         cfg.use_feedback_linearization = False
@@ -134,18 +136,14 @@ class NdobFbl:
             cfg.qpd_config = {}
         cfg.qpd_config['linear_range'] = 0.008
         
-        cfg.dynamics_config = base_cfg.get("dynamics_config", {
-            'pan_mass': 1, 'tilt_mass': 0.5, 'cm_r': 0.0, 'cm_h': 0.0, 'gravity': 9.81
-        })
-        
-        cfg.coarse_controller_config = base_cfg.get("coarse_controller_config", {})
-        
         return cfg
 
     def _build_fbl_config(self, base_cfg: dict) -> SimulationConfig:
         """Builds the SimulationConfig for standard FBL based on GUI inputs."""
+        cfg_data = copy.deepcopy(base_cfg)
+        
         excluded_keys = ["_gui_duration", "duration"]
-        cfg_args = {k: v for k, v in base_cfg.items() if k not in excluded_keys}
+        cfg_args = {k: v for k, v in cfg_data.items() if k not in excluded_keys}
         cfg = SimulationConfig(**cfg_args)
         
         cfg.use_feedback_linearization = True
@@ -157,43 +155,33 @@ class NdobFbl:
             cfg.qpd_config = {}
         cfg.qpd_config['linear_range'] = 0.008
         
-        cfg.dynamics_config = base_cfg.get("dynamics_config", {
-            'pan_mass': 1, 'tilt_mass': 0.5, 'cm_r': 0.0, 'cm_h': 0.0, 'gravity': 9.81
-        })
-        
-        cfg.feedback_linearization_config = base_cfg.get("feedback_linearization_config", {})
-        
         # Ensure NDOB is disabled for baseline FBL test
-        cfg.ndob_config = base_cfg.get("ndob_config", {})
+        if not hasattr(cfg, 'ndob_config') or not isinstance(cfg.ndob_config, dict):
+            cfg.ndob_config = {}
         cfg.ndob_config['enable'] = False
+        
+        # FBL requires integral enabled for this specific test case
+        if not hasattr(cfg, 'feedback_linearization_config') or not isinstance(cfg.feedback_linearization_config, dict):
+            cfg.feedback_linearization_config = {}
+        cfg.feedback_linearization_config['enable_integral'] = True
         
         return cfg
 
     def _build_ndob_config(self, base_cfg: dict) -> SimulationConfig:
         """Builds the SimulationConfig for FBL+NDOB based on GUI inputs."""
+        # Start from FBL config
         cfg = self._build_fbl_config(base_cfg)
         
-        # From base_cfg read lambda parameters provided by GUI
-        gui_ndob = base_cfg.get("ndob_config", {})
-        
-        # Reset targets to avoid inheritance bugs
+        # Reset targets to base base_cfg values to avoid mutation from previous test runs
         cfg.target_az = base_cfg.get("target_az", 0.0)
         cfg.target_el = base_cfg.get("target_el", 0.0)
         
-        cfg.ndob_config = {
-            'enable': True,
-            'lambda_az': gui_ndob.get("lambda_az", 70.0),
-            'lambda_el': gui_ndob.get("lambda_el", 90.0),
-            'd_max': gui_ndob.get("d_max", 0.5)
-        }
+        # Enable NDOB
+        cfg.ndob_config['enable'] = True
         
-        # Disable integral action; let NDOB handle steady state error
-        if 'feedback_linearization_config' in cfg.__dict__:
-            # Since SimulationConfig might use field defaults differently, ensure dictionary exists
-            if not isinstance(cfg.feedback_linearization_config, dict):
-                cfg.feedback_linearization_config = {}
-            cfg.feedback_linearization_config['enable_integral'] = False
-            cfg.feedback_linearization_config['enable_disturbance_compensation'] = False
+        # Disable integral action; let NDOB handle steady state error (as requested)
+        cfg.feedback_linearization_config['enable_integral'] = False
+        cfg.feedback_linearization_config['enable_disturbance_compensation'] = False
             
         return cfg
 
