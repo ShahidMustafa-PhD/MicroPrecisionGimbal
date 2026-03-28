@@ -357,12 +357,13 @@ class NonlinearDisturbanceObserver:
         # high velocities, so this clip represents physical reality.
         dq_clipped = np.clip(dq, -self.config.max_dq_ndob, self.config.max_dq_ndob)
         self._is_velocity_clipped = np.any(np.abs(dq) > self.config.max_dq_ndob)
-        
+        dq_clipped=dq  # we bypass the clipping  derivative of M is not taken zero
         # Get dynamics matrices at current state
         # NOTE: Coriolis uses clipped velocity to prevent observer wind-up
         C = self.dynamics.get_coriolis_matrix(q, dq_clipped)
         G = self.dynamics.get_gravity_vector(q)
-        
+        # 2. Get the exact analytical M_dot
+        M_dot = self.dynamics.get_M_dot(q, dq)
         # Compute auxiliary function p(q, dq_clipped) = L * M(q) * dq_clipped
         # CRITICAL: Use clipped velocity for p to prevent momentum term from spiking
         p = self._compute_auxiliary_p(q, dq_clipped)
@@ -380,14 +381,14 @@ class NonlinearDisturbanceObserver:
         
         # TRANSIENT DETECTION: Detect large torque changes (square wave edges)
         # If tau changes by more than threshold, freeze integration to prevent windup
-        tau_change = np.abs(tau - self._tau_prev)
-        is_transient = np.any(tau_change > self.config.transient_threshold)
+       # tau_change = np.abs(tau - self._tau_prev)
+        #is_transient = np.any(tau_change > self.config.transient_threshold)
         
-        if is_transient:
-            self._freeze_counter = self.config.transient_freeze_steps
+        #if is_transient:
+        #    self._freeze_counter = self.config.transient_freeze_steps
         
         # Update tau history for next step
-        self._tau_prev = tau.copy()
+       # self._tau_prev = tau.copy()
         
         # Compute Coriolis + gravity terms
         # CRITICAL: Use clipped velocity for Coriolis to match clipped p calculation
@@ -406,18 +407,21 @@ class NonlinearDisturbanceObserver:
         # Observer dynamics (modified for reference tracking):
         # ż = -Lz + L[C*dq + G - (τ - M*ddq_ref) - p]
         #   = -Lz + L*C*dq + L*G - L*(τ - M*ddq_ref) - L*p
-        inner_term = coriolis_term + G - tau_adjusted - p
+        # 4. The Exact Mohammadi (2017) Observer Dynamics:
+        # ż = -Lz + L[C*dq + G - τ - p - M_dot*dq]
+        mdot_term = M_dot @ dq
+        inner_term = coriolis_term + G - tau - p - mdot_term  # mdot_term  not zero. modified 26/03/2026
         z_dot = -self._L @ self._z + self._L @ inner_term
         self._last_z_dot = z_dot.copy()
         
         # CONDITIONAL INTEGRATION: Freeze during transients
-        if self._freeze_counter > 0:
+       # if self._freeze_counter > 0:
             # Don't integrate during transient - hold z constant
-            self._freeze_counter -= 1
+          #  self._freeze_counter -= 1
             # z_dot is computed but not applied
-        else:
+        #else:
             # Forward Euler integration (normal operation)
-            self._z = self._z + dt * z_dot
+        self._z = self._z + dt * z_dot
         
         # Compute disturbance estimate: d_hat = z + p
         d_hat_raw = self._z + p
