@@ -41,6 +41,7 @@ from abc import ABC, abstractmethod
 import numpy as np
 from typing import Tuple, Optional, Dict
 from dataclasses import dataclass
+from lasercom_digital_twin.core.friction.tustin_friction import SmoothedTustinFriction
 
 
 @dataclass
@@ -573,12 +574,28 @@ class FeedbackLinearizationController(BaseController):
         self.friction_az = config.get('friction_az', 0.0)  # N·m·s/rad
         self.friction_el = config.get('friction_el', 0.0)  # N·m·s/rad
         print(f"DEBUG FBL Controller: friction_az={self.friction_az}, friction_el={self.friction_el}")
-        
+
+        # Nonlinear Feedforward Friction Model (Nominal / Intentionally Underestimated)
+        # ─────────────────────────────────────────────────────────────────────────────
+        # The plant uses: τ_fric = SmoothedTustinFriction(τ_s=[0.25,0.18], τ_c=[0.15,0.10], …)
+        # This controller uses UNDERESTIMATED parameters so the residual mismatch is
+        # non-zero and measurable. The NDOB then estimates and cancels this residual,
+        # demonstrating its value. Using exact parameters would make the NDOB redundant.
+        #
+        # Residual seen by NDOB ≈ τ_plant_fric − friction_comp  (should be small but non-zero)
+        self.nominal_friction_model = SmoothedTustinFriction(
+            tau_c=[0.12, 0.08],     # Underestimated from true plant: [0.15, 0.10]
+            tau_s=[0.20, 0.15],     # Underestimated from true plant: [0.25, 0.18]
+            v_s=[0.05, 0.05],
+            b=[self.friction_az, self.friction_el],  # Viscous part matches config
+            v_epsilon=0.05          # Slightly wider smoothing for numerical stability
+        )
+
         # Conditional friction compensation (CRITICAL for stability)
         # When True, only compensate friction if velocity is in same direction as desired acceleration
         # This prevents friction feedforward from fighting the controller during transients
         self.conditional_friction = config.get('conditional_friction', True)
-        
+        self.use_tustin_friction = config.get('use_tustin_friction', True)
         # Robust/Sliding Mode Term (handles model uncertainty)
         # Adds a switching term: -eta * sign(s) where s = error_dot + lambda * error
         # This provides robustness to unmodeled dynamics and parameter variations
@@ -600,7 +617,6 @@ class FeedbackLinearizationController(BaseController):
         self.previous_output = np.zeros(2)
         self.previous_error = np.zeros(2)
         self.integral = np.zeros(2)
-
     def compute_control(
         self, 
         q_ref: np.ndarray, 
@@ -609,7 +625,10 @@ class FeedbackLinearizationController(BaseController):
         dt: float,
         ddq_ref: Optional[np.ndarray] = None
     ) -> Tuple[np.ndarray, Dict]:
+        #This controller is not used in the current simulation.
+        # Handle default acceleration reference
         """
+       
         Compute torque using Feedback Linearization.
         
         Signal Flow Explanation:
@@ -655,12 +674,10 @@ class FeedbackLinearizationController(BaseController):
             - command: Commanded torque [N·m] (2-element)
             - metadata: Dict with intermediate signals for logging
         """
-        # Handle default acceleration reference
         if ddq_ref is None:
             ddq_ref = np.zeros(2)
         
         # 1. Extract estimated states from EKF
-        # The EKF in estimators/state_estimator.py provides these filtered estimates
         q = np.array([
             state_estimate['theta_az'], 
             state_estimate['theta_el']
@@ -670,6 +687,12 @@ class FeedbackLinearizationController(BaseController):
             state_estimate['theta_dot_el']
         ])
         
+        # Initialize tracking variables for the Separation Principle
+        if not hasattr(self, 'previous_friction_comp'):
+            self.previous_friction_comp = np.zeros(2)
+        if not hasattr(self, 'previous_output'):
+            self.previous_output = np.zeros(2)
+
         # Disturbance estimates from EKF (only used if enabled)
         if self.enable_disturbance_compensation:
             d_hat = np.array([
@@ -677,44 +700,38 @@ class FeedbackLinearizationController(BaseController):
                 state_estimate['dist_el']
             ])
         else:
-            d_hat = np.zeros(2)  # Ignore EKF disturbance estimates
+            d_hat = np.zeros(2) 
 
-        # 2. Compute Linearizing Terms (Physics cancellation)
-        # These methods are from GimbalDynamics in dynamics/gimbal_dynamics.py
+        # 2. Compute Linearizing Terms
         M = self.dyn.get_mass_matrix(q)
         C = self.dyn.get_coriolis_matrix(q, dq)
         G = self.dyn.get_gravity_vector(q)
 
-        # 2.1 Update Nonlinear Disturbance Observer (NDOB)
-        # Uses the dynamics model and measurements to estimate lumped disturbances
-        # tau_prev is the torque applied during the previous step (k-1)
-        # CRITICAL: Pass ddq_ref so NDOB doesn't mistake commanded acceleration for disturbance
+        # =================================================================
+        # 2.1 ENFORCE THE SEPARATION PRINCIPLE FOR THE NDOB
+        # We MUST hide the feedforward friction from the NDOB to prevent
+        # the 200% positive feedback limit cycle.
+        # =================================================================
         d_hat_ndob = np.zeros(2)
         if self.ndob is not None:
-            # Update observer and get estimate
-            # dt is the control cycle duration
-            # Pass ddq_ref to prevent square wave transients from being seen as disturbance
-            d_hat_ndob = self.ndob.update(q, dq, self.previous_output, dt, ddq_ref=ddq_ref)
+            tau_to_ndob = self.previous_output - self.previous_friction_comp
+            # The ddq_ref subtraction was removed from NDOB, so we do not pass it here.
+            d_hat_ndob = self.ndob.update(q, dq, tau_to_ndob, dt)
 
         # 3. Outer Loop: Define the desired acceleration in linearized space
         error = q_ref - q
         error_dot = dq_ref - dq
         
-        # Update integral if enabled
         if self.enable_integral:
             self.integral += error * dt
-            # Simple anti-windup: clamp integral
-            integral_max = 1.0  # rad·s
+            integral_max = 1.0 
             self.integral = np.clip(self.integral, -integral_max, integral_max)
         
-        # Virtual control input (desired acceleration in linearized coordinates)
-        # This is the "v" in the standard feedback linearization formulation
-        # PID outer loop: v = Kp*e + Kd*de + Ki*∫e
         v = ddq_ref + self.kp * error + self.kd * error_dot
         if self.enable_integral:
             v += self.ki * self.integral
 
-        # 4. Nonlinear Inverse Dynamics with Disturbance Compensation
+       # 4. Nonlinear Inverse Dynamics with Disturbance Compensation
         # Transform virtual control to actual torque by inverting the dynamics
         # tau = M*v + C*dq + G + D*dq - d_hat + u_robust
         # 
@@ -726,54 +743,58 @@ class FeedbackLinearizationController(BaseController):
         # - d_hat: Feedforward compensation for estimated disturbances
         # - u_robust: Sliding mode term for robustness
         
-        # Friction compensation with CONDITIONAL logic
-        # Only compensate friction when velocity is in the same direction as desired control
-        # This prevents friction feedforward from fighting the controller during transients
-        # (e.g., when overshooting and trying to decelerate, friction helps slow down!)
-        friction_coeff = np.array([self.friction_az, self.friction_el])
-        
-        if self.conditional_friction:
-            # Compute desired acceleration direction from outer loop
-            desired_accel_sign = np.sign(v)
-            velocity_sign = np.sign(dq)
-            
-            # Only compensate friction if velocity and desired acceleration are aligned
-            # If they oppose (overshoot scenario), let plant friction help slow down
-            aligned = (desired_accel_sign * velocity_sign) >= 0
+        # ── Friction Feedforward Compensation ────────────────────────────────
+        # Strategy: Compute nonlinear (Tustin/Stribeck) friction estimate from
+        # the nominal model, then apply CONDITIONALLY based on motion intent.
+        #
+        # Two cases:
+        #  (a) ALIGNED  — velocity and desired acceleration point the same way.
+        #      → The plant friction opposes useful motion, so we must cancel it.
+        #      → Apply the full nonlinear friction estimate: friction_comp = τ_nominal(dq)
+        #
+        #  (b) OPPOSING — e.g. overshoot: v commands decel while gimbal still moves forward.
+        #      → Plant friction is HELPING deceleration; compensating it would fight braking.
+        #      → Only add the viscous term so we have a smooth, predictable baseline without
+        #        over-cancelling the beneficial Coulomb/Stribeck contribution.
+        #
+        # The intentional model mismatch (underestimated τ_s, τ_c) leaves a residual that
+        # the NDOB estimates and passes back via d_hat_ndob, completing the compensation loop.
+  
+        #if self.conditional_friction:
+        if not self.use_tustin_friction:
+            desired_accel_sign = np.sign(v)       # Direction of commanded virtual acceleration
+            velocity_sign     = np.sign(dq)       # Direction of current joint motion
+            aligned = (desired_accel_sign * velocity_sign) >= 0  # Element-wise
+
+            # Full nonlinear friction from nominal (underestimated) Tustin model
+            nominal_fric = self.nominal_friction_model(dq)
+            friction_coeff = np.array([self.friction_az, self.friction_el])
+            # Viscous fallback: only b*dq (no Coulomb/stiction) when opposing
+            viscous_only = np.array([self.friction_az, self.friction_el]) * dq
             friction_comp = np.where(aligned, friction_coeff * dq, np.zeros(2))
+            # Select per-axis: full compensation when aligned, viscous-only when opposing
+            #friction_comp = np.where(aligned, nominal_fric, viscous_only)
         else:
-            # Standard friction compensation (always active)
-            friction_comp = friction_coeff * dq
-        
-        # Robust/Sliding Mode Term for handling model uncertainties
-        # Uses a smoothed sign function (tanh) to avoid chattering
+            # Unconditional: always apply the full nonlinear friction estimate
+            friction_comp = self.nominal_friction_model(dq)
         if self.enable_robust_term:
-            # Sliding surface: s = error_dot + lambda * error
             s = error_dot + self.robust_lambda * error
-            
-            # Smoothed switching: tanh(s/epsilon) instead of sign(s)
-            # This creates a boundary layer for continuous control
             u_robust = -self.robust_eta * np.tanh(s / self.robust_epsilon)
         else:
             u_robust = np.zeros(2)
         
-        # Commanded torque (IMPROVED FORMULATION)
-        # tau = M*v + C*dq + G + friction_comp - d_hat + d_hat_ndob + u_robust
-        # Note: we ADD d_hat_ndob because the observer estimates the disturbance d
-        # acting on the plant (tau + d = M*ddq + ...), so compensation is tau = ... - d_hat
-        # Wait, usually it is tau_total = tau_nominal - d_hat.
-        # Let's check NDOB sign. The NDOB module says: tau + d = M*ddq + ...
-        # So tau = M*ddq + ... - d. Thus tau_cmd = (...) - d_hat.
+        # The core control law: Cancel rigid body, add nominal friction, subtract residual disturbance
         tau = M @ v + C @ dq + G + friction_comp - d_hat - d_hat_ndob + u_robust
 
         # 5. Apply Actuator Saturation
         u_saturated = np.clip(tau, self.tau_min, self.tau_max)
         
-        # Update state
+        # Update states for the NEXT step
         self.previous_output = u_saturated.copy()
+        self.previous_friction_comp = friction_comp.copy()
         self.previous_error = error.copy()
         
-        # Metadata for logging and debugging
+        # Metadata logging
         metadata = {
             'error': error,
             'error_dot': error_dot,
@@ -782,16 +803,16 @@ class FeedbackLinearizationController(BaseController):
             'C_term': C @ dq,
             'G_term': G,
             'friction_comp': friction_comp,
-            'u_robust': u_robust if self.enable_robust_term else np.zeros(2),
+            'u_robust': u_robust,
             'dist_compensated': d_hat,
-            'd_hat_ndob': d_hat_ndob,  # Add NDOB estimate to metadata
+            'd_hat_ndob': d_hat_ndob,  
             'tau_unsaturated': tau,
             'saturation_active': np.any(u_saturated != tau),
-            'conditional_friction_active': self.conditional_friction
+            'conditional_friction_active': False
         }
 
         return u_saturated, metadata
-
+   
     def reset(self) -> None:
         """Reset controller state."""
         self.previous_output = np.zeros(2)
