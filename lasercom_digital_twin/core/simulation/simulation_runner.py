@@ -61,6 +61,9 @@ from lasercom_digital_twin.core.controllers.fsm_pid_control import (
     create_fsm_controller_from_design
 )
 from lasercom_digital_twin.core.n_dist_observer import create_ndob_from_config
+from lasercom_digital_twin.core.friction.tustin_friction import SmoothedTustinFriction
+from lasercom_digital_twin.core.friction.lugre_friction import LuGreFriction
+
 
 # Environmental disturbance models (wind, vibration, structural noise)
 from lasercom_digital_twin.core.disturbances import (
@@ -106,7 +109,29 @@ class SimulationConfig:
     # Controller selection
     use_feedback_linearization: bool = False  # Use FL controller instead of PID
     use_direct_state_feedback: bool = False   # Bypass EKF, use true state (for debugging)
-    
+    use_tustin_friction: bool = False        # Selection of Tustin friction in simulation systems
+    use_lugre_friction: bool = False         # Selection of LuGre dynamic friction in simulation (overrides Tustin if both True)
+
+    # LuGre Dynamic Friction Model configuration
+    # Unlike Tustin (algebraic), LuGre has internal bristle state z that must be integrated.
+    # The bristle dynamics dz/dt = v - sigma_0*|v|*z/g(v) create history-dependent friction
+    # that produces quadrant glitches at velocity reversals — invisible to Tustin models.
+    lugre_config: Dict = field(default_factory=lambda: {
+        'sigma_0_az': 1.0e4,       # Bristle stiffness Az [N·m/rad] (typically 1e4–1e5)
+        'sigma_0_el': 8.0e3,       # Bristle stiffness El [N·m/rad]
+        'sigma_1_az': 1.0,         # Bristle damping Az [N·m·s/rad] (typically 0.5–2.0)
+        'sigma_1_el': 0.8,         # Bristle damping El [N·m·s/rad]
+        'sigma_2_az': 0.02,        # Viscous coefficient Az [N·m·s/rad] (matches Tustin b)
+        'sigma_2_el': 0.015,       # Viscous coefficient El [N·m·s/rad]
+        'tau_c_az': 0.15,          # Coulomb friction Az [N·m] (matches Tustin plant)
+        'tau_c_el': 0.10,          # Coulomb friction El [N·m]
+        'tau_s_az': 0.25,          # Static friction Az [N·m] (matches Tustin plant)
+        'tau_s_el': 0.18,          # Static friction El [N·m]
+        'v_s_az': 0.05,            # Stribeck velocity Az [rad/s]
+        'v_s_el': 0.05,            # Stribeck velocity El [rad/s]
+        'lugre_max_dt': 1e-4,      # Max bristle integration timestep [s] — drives adaptive sub-stepping
+    })
+
     # Component configs
     dynamics_config: Dict = field(default_factory=dict)
     motor_config: Dict = field(default_factory=dict)
@@ -252,7 +277,20 @@ class SimulationState:
     wind_torque_el: float = 0.0      # Wind component [N·m]
     vibration_torque_az: float = 0.0 # Vibration component [N·m]
     vibration_torque_el: float = 0.0 # Vibration component [N·m]
-    
+    friction_tustin_torque_az: float = 0.0 # Friction component [N·m]
+    friction_tustin_torque_el: float = 0.0 # Friction component [N·m]
+
+    # LuGre Dynamic Friction Model diagnostics
+    # The bristle deflection z is the INTERNAL STATE of the LuGre model.
+    # Logging it enables post-hoc correlation of quadrant glitch events
+    # (z transient at velocity reversal) with handover error spikes.
+    lugre_bristle_z_az: float = 0.0        # Bristle deflection Az [rad]
+    lugre_bristle_z_el: float = 0.0        # Bristle deflection El [rad]
+    lugre_dz_dt_az: float = 0.0            # Bristle rate Az [rad/s] (dz/dt)
+    lugre_dz_dt_el: float = 0.0            # Bristle rate El [rad/s] (dz/dt)
+    friction_lugre_torque_az: float = 0.0  # LuGre friction torque Az [N·m]
+    friction_lugre_torque_el: float = 0.0  # LuGre friction torque El [N·m]
+
     # EKF Diagnostics (covariance, innovation, adaptive tuning)
     ekf_cov_theta_az: float = 0.0         # State covariance P[0,0] (θ_Az) [rad²]
     ekf_cov_theta_dot_az: float = 0.0     # State covariance P[1,1] (θ̇_Az) [(rad/s)²]
@@ -329,6 +367,51 @@ class DigitalTwinRunner:
         self.gravity = dynamics_cfg.get('gravity', 9.81)
         self.friction_az = dynamics_cfg.get('friction_az', 0.1)
         self.friction_el = dynamics_cfg.get('friction_el', 0.1)
+
+        # Initialize Tustin Friction Model (High-Fidelity Nonlinear Friction)
+        self.tustin_friction_model = SmoothedTustinFriction(
+            tau_s=[0.25, 0.18],
+            tau_c=[0.15, 0.10],
+            v_s=[0.05, 0.05],
+            b=[0.02, 0.015],
+            v_epsilon=0.05  # CRITICAL FIX: Add this to prevent numerical chattering
+        )
+        
+        self.use_tustin_friction = self.config.use_tustin_friction
+
+        # Initialize LuGre Dynamic Friction Model
+        # Unlike Tustin (memoryless algebraic map), LuGre carries internal bristle
+        # state z that must be integrated synchronously with plant dynamics.
+        # The bristle dynamics create history-dependent friction with quadrant glitches
+        # at velocity reversals — the primary subject of the upcoming research paper.
+        lugre_cfg = self.config.lugre_config or {}
+        self.lugre_friction_model = LuGreFriction(
+            sigma_0=np.array([lugre_cfg.get('sigma_0_az', 1.0e4),
+                              lugre_cfg.get('sigma_0_el', 8.0e3)]),
+            sigma_1=np.array([lugre_cfg.get('sigma_1_az', 1.0),
+                              lugre_cfg.get('sigma_1_el', 0.8)]),
+            sigma_2=np.array([lugre_cfg.get('sigma_2_az', 0.02),
+                              lugre_cfg.get('sigma_2_el', 0.015)]),
+            tau_c=np.array([lugre_cfg.get('tau_c_az', 0.15),
+                            lugre_cfg.get('tau_c_el', 0.10)]),
+            tau_s=np.array([lugre_cfg.get('tau_s_az', 0.25),
+                            lugre_cfg.get('tau_s_el', 0.18)]),
+            v_s=np.array([lugre_cfg.get('v_s_az', 0.05),
+                          lugre_cfg.get('v_s_el', 0.05)]),
+            n_axes=2
+        )
+        self.use_lugre_friction = self.config.use_lugre_friction
+        self.lugre_max_dt = lugre_cfg.get('lugre_max_dt', 1e-4)
+
+        # Print friction model selection for diagnostics
+        if self.use_lugre_friction:
+            print(f"  [FRICTION] LuGre dynamic model ACTIVE "
+                  f"(sigma_0=[{lugre_cfg.get('sigma_0_az', 1e4):.0f}, {lugre_cfg.get('sigma_0_el', 8e3):.0f}] N.m/rad, "
+                  f"lugre_max_dt={self.lugre_max_dt:.2e} s)")
+        elif self.use_tustin_friction:
+            print(f"  [FRICTION] Tustin/Stribeck algebraic model ACTIVE")
+        else:
+            print(f"  [FRICTION] Simple viscous model ACTIVE (D_az={self.friction_az}, D_el={self.friction_el})")
 
         # Actuator command hold (multi-rate ZOH)
         self.voltage_cmd_az: float = 0.0
@@ -501,9 +584,9 @@ class DigitalTwinRunner:
         self._fsm_n_states = self.fsm_dynamics.n_states
         self._fsm_theta_max = self.fsm_dynamics.theta_max
         
-        print(f"INFO: FSM initialized — {fsm_info['vendor']} ({fsm_info['type']}), "
-              f"±{fsm_info['stroke_mrad']:.1f} mrad stroke, "
-              f"f_n={fsm_info['f_n_Hz']:.0f} Hz, ζ={fsm_info['zeta']:.3f}, "
+        print(f"INFO: FSM initialized - {fsm_info['vendor']} ({fsm_info['type']}), "
+              f"+/-{fsm_info['stroke_mrad']:.1f} mrad stroke, "
+              f"f_n={fsm_info['f_n_Hz']:.0f} Hz, zeta={fsm_info['zeta']:.3f}, "
               f"{fsm_info['n_states']}-state model")
     
     def _init_sensors(self) -> None:
@@ -642,7 +725,7 @@ class DigitalTwinRunner:
                 self.gimbal_dynamics, 
                 self.config.ndob_config
             )
-            print(f"INFO: NDOB initialized (λ_az={self.config.ndob_config['lambda_az']}, λ_el={self.config.ndob_config['lambda_el']})")
+            print(f"INFO: NDOB initialized (lambda_az={self.config.ndob_config['lambda_az']}, lambda_el={self.config.ndob_config['lambda_el']})")
         
         # Select coarse controller type
         if self.config.use_feedback_linearization:
@@ -655,6 +738,9 @@ class DigitalTwinRunner:
                 'tau_max': [10.0, 10.0],
                 'tau_min': [-10.0, -10.0]
             }
+            # Inject global friction selection into controller config
+            fl_config['use_tustin_friction'] = self.config.use_tustin_friction
+            
             self.coarse_controller = FeedbackLinearizationController(
                 fl_config, 
                 self.gimbal_dynamics,
@@ -797,7 +883,7 @@ class DigitalTwinRunner:
             print(f"      Vibration: modes={vibration_config.modal_frequencies} Hz, "
                   f"start={vibration_config.start_time:.1f}s")
         if struct_cfg.get('enabled', False):
-            print(f"      Structural noise: σ={struct_cfg.get('std', 0.005):.4f} N·m")
+            print(f"      Structural noise: std={struct_cfg.get('std', 0.005):.4f} N.m")
     
     def _init_logging(self) -> None:
         """Initialize data logging infrastructure."""
@@ -839,6 +925,10 @@ class DigitalTwinRunner:
             'tau_disturbance_az', 'tau_disturbance_el',
             'wind_torque_az', 'wind_torque_el',
             'vibration_torque_az', 'vibration_torque_el',
+            'friction_tustin_torque_az', 'friction_tustin_torque_el',
+            'lugre_bristle_z_az', 'lugre_bristle_z_el',
+            'lugre_dz_dt_az', 'lugre_dz_dt_el',
+            'friction_lugre_torque_az', 'friction_lugre_torque_el',
             'fsm_stroke_limit_rad',
             'is_beam_on_sensor'
         ]
@@ -930,11 +1020,63 @@ class DigitalTwinRunner:
             # compute_forward_dynamics solves M*qdd = tau - C*dq - G
             # We supply tau = tau_motor - Friction + tau_disturbance
             tau_motor = np.array([self.state.torque_az, self.state.torque_el])
-            tau_friction = np.array([
-                self.friction_az * self.qd_az,
-                self.friction_el * self.qd_el
-            ])
+
+            # Conditionally select friction model
+            # Priority: LuGre > Tustin > Viscous
+            # LuGre is a DYNAMICAL model with internal bristle state z that must be
+            # integrated synchronously with the plant. Unlike Tustin (algebraic, memoryless),
+            # LuGre produces history-dependent friction with quadrant glitches at velocity
+            # reversals. The sub-stepping loop ensures numerical stability when bristle
+            # stiffness sigma_0 is high (natural freq ~ sqrt(sigma_0/sigma_1) can reach kHz).
+            if self.use_lugre_friction:
+                # Velocity-adaptive sub-stepping for Forward Euler bristle stability.
+                #
+                # The bristle ODE is linear in z: dz/dt = v - K(v)*z,
+                # where K(v) = sigma_0*|v| / g(v).
+                # Forward Euler stability requires: dt_sub < 2/K(v) = 2*g(v)/(sigma_0*|v|).
+                #
+                # At low velocity K→0 so the fixed lugre_max_dt bound governs.
+                # At high velocity K grows and we must tighten dt_sub proportionally.
+                # Using a 0.5 safety factor: dt_sub_stable = g(v)/(sigma_0*|v|).
+                # We take the minimum of lugre_max_dt and dt_sub_stable per-axis,
+                # then use the tighter of the two axes.
+                dq_current = np.array([self.qd_az, self.qd_el])
+                v_abs = np.abs(dq_current) + 1e-9  # avoid div-by-zero at rest
+                g_v = self.lugre_friction_model.g(dq_current)
+                # Stability limit with 0.5 safety factor (half the Forward Euler limit)
+                dt_sub_stable = np.min(g_v / (self.lugre_friction_model.sigma_0 * v_abs))
+                dt_sub_max = min(self.lugre_max_dt, dt_sub_stable)
+                n_substeps = max(1, int(np.ceil(dt / dt_sub_max)))
+                dt_sub = dt / n_substeps
+                tau_friction = np.zeros(2)
+                for _ in range(n_substeps):
+                    tau_friction = self.lugre_friction_model.step(dq_current, dt_sub)
+
+                # Log bristle state for post-hoc quadrant glitch analysis
+                bristle_z = self.lugre_friction_model.get_bristle_state()
+                bristle_dz = self.lugre_friction_model._dz_dt
+                self.state.lugre_bristle_z_az = bristle_z[0]
+                self.state.lugre_bristle_z_el = bristle_z[1]
+                self.state.lugre_dz_dt_az = bristle_dz[0]
+                self.state.lugre_dz_dt_el = bristle_dz[1]
+                self.state.friction_lugre_torque_az = tau_friction[0]
+                self.state.friction_lugre_torque_el = tau_friction[1]
+
+            elif self.use_tustin_friction:
+                # High-fidelity nonlinear friction (algebraic, memoryless)
+                tau_friction = self.tustin_friction_model(np.array([self.qd_az, self.qd_el]))
+            else:
+                # Simple viscous friction
+                tau_friction = np.array([
+                    self.friction_az * self.qd_az,
+                    self.friction_el * self.qd_el
+                ])
+
             tau_net = tau_motor - tau_friction + tau_disturbance
+
+            # Save friction components for logging/diagnostics
+            self.state.friction_tustin_torque_az = tau_friction[0]
+            self.state.friction_tustin_torque_el = tau_friction[1]
 
             # 4. Compute Accelerations via Inverted Mass Matrix
             # q̈ = M⁻¹(τ_net - C·q̇ - G)
@@ -1474,7 +1616,16 @@ class DigitalTwinRunner:
             self.log_data['wind_torque_el'].append(float(self.state.wind_torque_el))
             self.log_data['vibration_torque_az'].append(float(self.state.vibration_torque_az))
             self.log_data['vibration_torque_el'].append(float(self.state.vibration_torque_el))
-            
+            self.log_data['friction_tustin_torque_az'].append(float(self.state.friction_tustin_torque_az))
+            self.log_data['friction_tustin_torque_el'].append(float(self.state.friction_tustin_torque_el))
+            # LuGre bristle state diagnostics (zero when LuGre is not active)
+            self.log_data['lugre_bristle_z_az'].append(float(self.state.lugre_bristle_z_az))
+            self.log_data['lugre_bristle_z_el'].append(float(self.state.lugre_bristle_z_el))
+            self.log_data['lugre_dz_dt_az'].append(float(self.state.lugre_dz_dt_az))
+            self.log_data['lugre_dz_dt_el'].append(float(self.state.lugre_dz_dt_el))
+            self.log_data['friction_lugre_torque_az'].append(float(self.state.friction_lugre_torque_az))
+            self.log_data['friction_lugre_torque_el'].append(float(self.state.friction_lugre_torque_el))
+
             # Virtual control signal v (outer loop commanded acceleration)
             v_sig = self.last_coarse_meta.get('v_signal', np.zeros(2))
             self.log_data['v_virtual_az'].append(float(v_sig[0]))
@@ -1593,7 +1744,7 @@ class DigitalTwinRunner:
                     val >= reach_angle_rad):
                     self._hybridsig_hold = True
                     self._hold_angle = reach_angle_rad
-                    print(f"[HYBRIDSIG] Reach angle {self.config.target_reachangle:.1f}° achieved at t={t:.3f}s, holding...")
+                    print(f"[HYBRIDSIG] Reach angle {self.config.target_reachangle:.1f} deg achieved at t={t:.3f}s, holding...")
                 self._hybridsig_prev_val = val
                 
             if self._hybridsig_hold:
@@ -1685,7 +1836,7 @@ class DigitalTwinRunner:
         print(f"  dt_sim: {self.config.dt_sim*1e3:.2f} ms")
         print(f"  dt_coarse: {self.config.dt_coarse*1e3:.2f} ms")
         print(f"  dt_fine: {self.config.dt_fine*1e3:.2f} ms")
-        print(f"  Target: Az={np.rad2deg(self.config.target_az):.2f}°, El={np.rad2deg(self.config.target_el):.2f}°")
+        print(f"  Target: Az={np.rad2deg(self.config.target_az):.2f} deg, El={np.rad2deg(self.config.target_el):.2f} deg")
         print(f"  Visualization: {'Enabled' if self.config.enable_visualization else 'Disabled'}")
         
         # Initialize visualization if requested (OUTSIDE main loop)
