@@ -266,8 +266,8 @@ class FrequencyResponseSimulator:
                     'enable_integral': False,
                     'tau_max': [10.0, 10.0],
                     'tau_min': [-10.0, -10.0],
-                    'friction_az': 0.1,
-                    'friction_el': 0.1,
+                    'friction_az': 0.02,
+                    'friction_el': 0.015,
                     'enable_disturbance_compensation': False
                 },
                 dynamics_model=self.dynamics,
@@ -690,14 +690,15 @@ def plot_frequency_response_comparison(
         print("[OK] Data saved to frequency_response_data/")
 
 
-def run_three_way_comparison(signal_type='constant', disturbance_config=None):
+def run_three_way_comparison(signal_type='constant', disturbance_config=None,
+                             friction_model='tustin'):
     """
     Execute three sequential simulations for comparative analysis.
-    
+
     Test 1: Standard PID Controller (Baseline)
     Test 2: Feedback Linearization (FBL)
     Test 3: Feedback Linearization + NDOB (FBL+NDOB)
-    
+
     Parameters
     ----------
     signal_type : str
@@ -709,6 +710,16 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
                 'wind': {'enabled': True, 'mean_velocity': 8.0, 'start_time': 3.0},
                 'vibration': {'enabled': True, 'modal_frequencies': [15.0, 45.0]},
             }
+    friction_model : str
+        Plant friction model for all three tests. Choose:
+          'tustin' (default) — SmoothedTustinFriction: algebraic Stribeck map,
+                               memoryless, numerically fast. No bristle transients.
+          'lugre'            — LuGreFriction: dynamic bristle ODE. Produces
+                               history-dependent friction with quadrant-glitch spikes
+                               at velocity reversals. NDOB must track these transients —
+                               the central research contribution of the paper.
+        Both models share identical steady-state Coulomb/Stribeck parameters so
+        any performance difference is solely due to LuGre's bristle dynamics.
     """
     print("\n" + "=" * 80)
     print("THREE-WAY CONTROLLER COMPARISON STUDY")
@@ -725,12 +736,12 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     # Common test parameters
     target_az_deg = 0
     target_el_deg = 0
-    duration = 5 # Increased to show full wave periods
+    duration = 1 # Increased to show full wave periods
     
     # Signal characteristics
-    target_amplitude = 90.0 # degrees
-    target_period = 20   # seconds
-    target_reachangle = 5  # degrees - for hybridsig only
+    target_amplitude = 30.0 # degrees
+    target_period = 15   # seconds
+    target_reachangle = 2  # degrees - for hybridsig only
     
     # =============================================================================
     # Environmental Disturbance Configuration
@@ -784,7 +795,6 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
         print(f"  - Reach Angle: {target_reachangle:.1f}° (hold after reaching)")
     print(f"  - Duration: {duration:.1f} seconds")
     print(f"  - Initial: [0°, 0°]")
-    print(f"  - Friction: Az=0.1 Nm/(rad/s), El=0.1 Nm/(rad/s)")
     print(f"  - Plant-Model Mismatch: 10% mass, 5% friction")
     
     # Print disturbance configuration
@@ -804,8 +814,99 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
                   f"f=[{s['freq_low']:.0f}-{s['freq_high']:.0f}] Hz")
     else:
         print(f"  - Environmental Disturbances: Disabled")
+
+    # =============================================================================
+    # Friction Model Configuration
+    # =============================================================================
+    # 'tustin' — SmoothedTustinFriction: algebraic Stribeck map, memoryless.
+    #            Identical torque at same velocity — no history effects.
+    # 'lugre'  — LuGreFriction: dynamic bristle ODE with internal state z.
+    #            Produces quadrant-glitch spikes at velocity reversals that the
+    #            NDOB must estimate. Controller and NDOB remain Tustin-based,
+    #            creating the plant-model mismatch that is the research focus.
+    friction_model = friction_model.lower()
+    if friction_model not in ('tustin', 'lugre','viscous'):
+        raise ValueError(
+            f"friction_model must be 'tustin' or 'lugre' or 'viscous', got '{friction_model}'"
+        )
+
+    use_tustin = (friction_model == 'tustin')
+    use_lugre  = (friction_model == 'lugre')
+    use_none   = (friction_model == 'none')
+
+    # Tustin (Smoothed Stribeck) friction parameters — passed to SmoothedTustinFriction.
+    # Shared tau_c/tau_s/v_s/b values are mirrored in lugre_cfg below for a fair comparison.
+    tustin_cfg = {
+        # ── Plant friction (true physical values) ────────────────────────────
+        'tau_s_az': 0.25,    # Static friction Az [N·m]
+        'tau_s_el': 0.18,    # Static friction El [N·m]
+        'tau_c_az': 0.15,    # Coulomb friction Az [N·m]
+        'tau_c_el': 0.10,    # Coulomb friction El [N·m]
+        'v_s_az': 0.05,      # Stribeck velocity Az [rad/s]
+        'v_s_el': 0.05,      # Stribeck velocity El [rad/s]
+        'b_az': 0.02,        # Viscous damping Az [N·m·s/rad]
+        'b_el': 0.015,       # Viscous damping El [N·m·s/rad]
+        'v_epsilon': 0.05,   # Smoothing threshold [rad/s] (prevents chattering)
+        # ── Controller nominal friction (intentionally underestimated) ────────
+        # Simulates imperfect friction identification. The NDOB compensates the residual.
+        # Runner applies ±nominal_friction_noise_pct perturbation for realism.
+        'nominal_tau_s_az': 0.25,   # ~80 % of plant tau_s_az
+        'nominal_tau_s_el': 0.18,   # ~83 % of plant tau_s_el
+        'nominal_tau_c_az': 0.15,   # ~80 % of plant tau_c_az
+        'nominal_tau_c_el': 0.10,   # ~80 % of plant tau_c_el
+  
+        'nominal_v_s_az': 0.05,   # Controller Stribeck velocity Az [rad/s]
+        'nominal_v_s_el': 0.05,   # Controller Stribeck velocity El [rad/s]
+        'nominal_v_epsilon': 0.05,  # Smoothing threshold for nominal model [rad/s]
+        'nominal_friction_noise_pct': 0.20,  # ±20 % uniform perturbation (measurement error)
+    }
+
+    # LuGre parameters matched to Tustin for a controlled comparison.
+    # sigma_2 = Tustin viscous b, tau_c/tau_s/v_s = Tustin Coulomb/static/Stribeck.
+    # The bristle stiffness sigma_0/sigma_1 are the only physically new parameters.
+    lugre_cfg = {
+        'sigma_0_az': 1.0e4,    # Bristle stiffness Az [N·m/rad]
+        'sigma_0_el': 8.0e3,    # Bristle stiffness El [N·m/rad]
+        'sigma_1_az': 1.0,      # Bristle damping Az [N·m·s/rad]
+        'sigma_1_el': 0.8,      # Bristle damping El [N·m·s/rad]
+        'sigma_2_az': 0.02,     # Viscous coeff Az = Tustin b_az [N·m·s/rad]
+        'sigma_2_el': 0.015,    # Viscous coeff El = Tustin b_el [N·m·s/rad]
+        'tau_c_az': 0.15,       # Coulomb friction Az = Tustin tau_c [N·m]
+        'tau_c_el': 0.10,       # Coulomb friction El = Tustin tau_c [N·m]
+        'tau_s_az': 0.25,       # Static friction Az  = Tustin tau_s [N·m]
+        'tau_s_el': 0.18,       # Static friction El  = Tustin tau_s [N·m]
+        'v_s_az': 0.05,         # Stribeck velocity Az = Tustin v_s [rad/s]
+        'v_s_el': 0.05,         # Stribeck velocity El [rad/s]
+        'lugre_max_dt': 1e-4,   # Max bristle integration step [s] (10 substeps at dt_sim=1ms)
+    }
+
+    # Simple viscous friction parameters — used when friction_model == 'viscous' (or as fallback).
+    viscous_cfg = {
+        'friction_az': 0.02,    # Azimuth viscous friction coefficient [N·m·s/rad]
+        'friction_el': 0.015,    # Elevation viscous friction coefficient [N·m·s/rad]
+    }
+
+    if use_lugre:
+        print(f"\n  Friction Model: LuGre DYNAMIC BRISTLE (quadrant-glitch mode)")
+        print(f"    sigma_0 = [{lugre_cfg['sigma_0_az']:.0f}, {lugre_cfg['sigma_0_el']:.0f}] N.m/rad  "
+              f"sigma_1 = [{lugre_cfg['sigma_1_az']:.2f}, {lugre_cfg['sigma_1_el']:.2f}] N.m.s/rad")
+        print(f"    tau_c = [{lugre_cfg['tau_c_az']:.2f}, {lugre_cfg['tau_c_el']:.2f}] N.m  "
+              f"tau_s = [{lugre_cfg['tau_s_az']:.2f}, {lugre_cfg['tau_s_el']:.2f}] N.m  "
+              f"v_s = {lugre_cfg['v_s_az']:.3f} rad/s")
+        print(f"    max_dt = {lugre_cfg['lugre_max_dt']:.1e} s  "
+              f"(bristle substeps = {int(0.001 / lugre_cfg['lugre_max_dt'])} per sim tick)")
+        print(f"    NOTE: Controller/NDOB remain Tustin-based -- bristle mismatch is the study.")
+    else:
+        print(f"\n  Friction Model: Tustin/Stribeck ALGEBRAIC (memoryless)")
+        print(f"    tau_c = [{tustin_cfg['tau_c_az']:.2f}, {tustin_cfg['tau_c_el']:.2f}] N.m  "
+              f"tau_s = [{tustin_cfg['tau_s_az']:.2f}, {tustin_cfg['tau_s_el']:.2f}] N.m  "
+              f"v_s = {tustin_cfg['v_s_az']:.3f} rad/s  "
+              f"b = [{tustin_cfg['b_az']:.3f}, {tustin_cfg['b_el']:.3f}] N.m.s/rad")
+        print(f"    nominal: tau_c = [{tustin_cfg['nominal_tau_c_az']:.2f}, {tustin_cfg['nominal_tau_c_el']:.2f}] N.m  "
+              f"tau_s = [{tustin_cfg['nominal_tau_s_az']:.2f}, {tustin_cfg['nominal_tau_s_el']:.2f}] N.m  "
+              f"noise = ±{tustin_cfg['nominal_friction_noise_pct']*100:.0f}%")
     print()
-    
+
     # =============================================================================
     # TEST 1: Standard PID Controller
     # =============================================================================
@@ -816,8 +917,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     config_pid = SimulationConfig(
         dt_sim=0.001,
         dt_coarse=0.01,
-        dt_fine=0.0001,
-        dt_qpd=0.0001,
+        dt_fine=0.00001,
+        dt_qpd=0.00001,
         log_period=0.001,
         seed=42,
         target_az=np.deg2rad(target_az_deg),
@@ -831,6 +932,12 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
         # Environmental disturbances (injected into plant only)
         environmental_disturbance_enabled=env_disturbance_enabled,
         environmental_disturbance_config=env_disturbance_cfg,
+        # --- Friction model selection (controlled by caller) ---
+        use_tustin_friction=use_tustin,
+        use_lugre_friction=use_lugre,
+        tustin_config=tustin_cfg,
+        lugre_config=lugre_cfg,
+        viscous_config=viscous_cfg,
         qpd_config={'linear_range': 0.008},  # Faster Handover Gating (~0.45 deg)
         dynamics_config={
             'pan_mass': 1,
@@ -845,8 +952,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
             'kp': [3.514, 1.320],    # Per-axis: [Pan, Tilt]
             'ki': [15.464, 4.148],   # Designed for 5 Hz bandwidth
             'kd': [0.293, 0.059418],  # Corrected Kd values (40% higher than before)
-            'tau_max': [10.0, 10.0],
-            'tau_min': [-10.0, -10.0],
+            'tau_max': [1.0, 1.0],
+            'tau_min': [-1.0, -1.0],
             'anti_windup_gain': 1.0,
             'tau_rate_limit': 50.0,
             'enable_derivative': True  # Now works correctly with fixed implementation
@@ -865,7 +972,7 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     print("-" * 80)
     
     config_fl = SimulationConfig(
-        dt_sim=0.0001,
+        dt_sim=0.001,
         dt_coarse=0.01,
         dt_fine=0.00001,
         dt_qpd=0.00001,
@@ -880,6 +987,12 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
         target_reachangle=target_reachangle,  # For hybridsig: angle to hold after reaching
         use_feedback_linearization=True,  # FL mode
         use_direct_state_feedback=False,   # Bypass EKF for cleaner controller testing
+        # --- Friction model selection (controlled by caller) ---
+        use_tustin_friction=use_tustin,
+        use_lugre_friction=use_lugre,
+        tustin_config=tustin_cfg,
+        lugre_config=lugre_cfg,
+        viscous_config=viscous_cfg,
         enable_visualization=False,
         enable_plotting=True,             # Disable automatic plots
         real_time_factor=0.0,
@@ -898,15 +1011,15 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
             # With friction feedforward for best baseline performance
             'kp': [400.0, 800.0],    # Position gain [1/s²]
             'kd': [40.0, 60.0],      # Velocity gain [1/s] - critically damped
-            'ki': [50.0, 25.0],      # Integral for residual disturbances
+            'ki': [50.0, 50.0],      # Integral for residual disturbances
             'enable_integral': True,  # ENABLE for steady-state performance
-            'tau_max': [10.0, 10.0],
-            'tau_min': [-10.0, -10.0],
-            # Friction feedforward - ENABLE for fair comparison
-            # NDOB test will disable this to show NDOB can replace it
-            'friction_az': 0.1,    # Match plant friction
-            'friction_el': 0.1,    # Match plant friction
+            'tau_max': [1.0, 1.0],
+            'tau_min': [-1.0, -1.0],
             # NOTE: conditional_friction defaults to True, which is REQUIRED
+            'conditional_friction':True,
+            # tustin friction is handled by top-level config now
+            # tustin friction is used to model the friction of bearings . it is calculated at 
+            # line 950 of simulation_runner.py
             # when combining with NDOB. Setting it False causes DOUBLE
             # friction compensation (FF + NDOB both compensate) leading to
             # instability (552k µrad vs 2.9k µrad baseline).
@@ -916,8 +1029,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
         # Enable this to estimate and compensate unmodeled disturbances (friction, etc.)
         ndob_config={
             'enable': False,  # Set True to enable NDOB disturbance compensation
-            'lambda_az': 30.0,  # Observer bandwidth Az [rad/s] (τ = 25ms)
-            'lambda_el': 100.0,  # Observer bandwidth El [rad/s]
+            'lambda_az': 35.0,  # Observer bandwidth Az [rad/s] (τ = 25ms)
+            'lambda_el': 40.0,  # Observer bandwidth El [rad/s]
             'd_max': 5.0        # Max disturbance estimate [N·m] (safety limit)
         },
         dynamics_config={
@@ -979,8 +1092,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
         # PRODUCTION RECOMMENDATION: Use NDOB at moderate bandwidth (50-100 rad/s)
         # combined with friction feedforward (conditional_friction=True) for
         # optimal performance.
-        'lambda_az': 70.0,   # Moderate bandwidth (avoids instability at >200)
-        'lambda_el': 90.0,   # Same for both axes
+        'lambda_az': 60.0,   # Moderate bandwidth (avoids instability at >200)
+        'lambda_el': 60.0,   # Same for both axes
         'd_max': 0.5         # Allow reasonable estimates
     }
     # KEEP friction feedforward ENABLED with NDOB!
@@ -995,8 +1108,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
     config_ndob.feedback_linearization_config['enable_integral'] = False
     config_ndob.feedback_linearization_config['enable_disturbance_compensation'] = False
     
-    print(f"DEBUG: friction_az = {config_ndob.feedback_linearization_config['friction_az']}")
-    print(f"DEBUG: friction_el = {config_ndob.feedback_linearization_config['friction_el']}")
+   # print(f"DEBUG: friction_az = {config_ndob.feedback_linearization_config['friction_az']}")
+   # print(f"DEBUG: friction_el = {config_ndob.feedback_linearization_config['friction_el']}")
     print(f"DEBUG: enable_integral = {config_ndob.feedback_linearization_config['enable_integral']}")
     print("Initializing FBL + NDOB controller simulation...")
     runner_ndob = DigitalTwinRunner(config_ndob)
@@ -1089,10 +1202,24 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None):
 
 
 if __name__ == '__main__':
+    # =========================================================================
+    # FRICTION MODEL SELECTION
+    # =========================================================================
+    # Choose which friction model the PLANT uses for all three tests.
+    # The controller and NDOB always use the Tustin algebraic model internally,
+    # so selecting 'lugre' creates a deliberate plant-model mismatch.
+    #
+    #   'tustin' — SmoothedTustinFriction (algebraic Stribeck map, memoryless).
+    #              Baseline behavior. Use this to establish reference metrics.
+    #
+    #   'lugre'  — LuGreFriction (dynamic bristle ODE).
+    #              Reveals quadrant-glitch torque spikes at velocity reversals.
+    #              Shows how much NDOB degrades when the friction model has memory.
+    #
+    FRICTION_MODEL = 'lugre'   # <-- CHANGE THIS: 'tustin' or 'lugre' or 'viscous'
+
     # Available signal types: 'constant', 'square', 'sine', 'cosine', 'hybridsig'
-    # Default is 'constant' to match previous behavior
-    # User can change this to 'square', 'sine', 'cosine', or 'hybridsig' to test dynamic tracking
-    
+
     # =========================================================================
     # ENVIRONMENTAL DISTURBANCE CONFIGURATION
     # =========================================================================
@@ -1109,7 +1236,7 @@ if __name__ == '__main__':
             'turbulence_intensity': 0.25, # σ_u/V_mean ratio (0.1=light, 0.2=moderate)
             'mean_velocity': 8.0,         # Mean wind speed V_mean [m/s]
             'direction_deg': 45.0,        # Wind direction (affects both axes)
-            'start_time': 2.0             # Delay onset [s]
+            'start_time': 6.0             # Delay onset [s]
         },
         'vibration': {
             'enabled': False,
@@ -1131,22 +1258,35 @@ if __name__ == '__main__':
     # =========================================================================
     # RUN OPTIONS
     # =========================================================================
-    
-    # 1. Constant Target (Legacy)
-    #run_three_way_comparison(signal_type='constant',disturbance_config=example_disturbance_config)
-    
-    # 2. Square Wave Target
-    # run_three_way_comparison(signal_type='square')
-    
-    # 3. Sine Wave Target
-    # run_three_way_comparison(signal_type='sine')
-    
-    # 4. Cosine Wave Target
-    # run_three_way_comparison(signal_type='cosine')
-    
-    # 5. Hybrid Signal (Sine wave until reach angle, then hold)
-    #run_three_way_comparison(signal_type='hybridsig')
-    
-    # 6. With Environmental Disturbances - demonstrates NDOB rejection capability
-    # Uncomment below to test with Dryden wind + structural vibration:
-    run_three_way_comparison(signal_type='hybridsig', disturbance_config=example_disturbance_config)
+    # All calls pass FRICTION_MODEL so the plant friction is consistent.
+    # Switch FRICTION_MODEL above between 'tustin' and 'lugre' to compare.
+
+    # 1. Constant Target
+    # run_three_way_comparison(signal_type='constant',
+    #                          friction_model=FRICTION_MODEL)
+
+    # 2. Constant Target + Environmental Disturbances
+    # run_three_way_comparison(signal_type='constant',
+    #                          disturbance_config=example_disturbance_config,
+    #                          friction_model=FRICTION_MODEL)
+
+    # 3. Square Wave Target
+    # run_three_way_comparison(signal_type='square',
+    #                          friction_model=FRICTION_MODEL)
+
+    # 4. Sine Wave Target
+    # run_three_way_comparison(signal_type='sine',
+    #                          friction_model=FRICTION_MODEL)
+
+    # 5. Cosine Wave Target
+    # run_three_way_comparison(signal_type='cosine',
+    #                          friction_model=FRICTION_MODEL)
+
+    # 6. Hybrid Signal (ramp to reach angle, then hold)
+    # run_three_way_comparison(signal_type='hybridsig',
+    #                          friction_model=FRICTION_MODEL)
+
+    # 7. Hybrid Signal + Environmental Disturbances (full stress test)
+    run_three_way_comparison(signal_type='hybridsig',
+                             disturbance_config=example_disturbance_config,
+                             friction_model=FRICTION_MODEL)
