@@ -357,13 +357,13 @@ class NonlinearDisturbanceObserver:
         # high velocities, so this clip represents physical reality.
         dq_clipped = np.clip(dq, -self.config.max_dq_ndob, self.config.max_dq_ndob)
         self._is_velocity_clipped = np.any(np.abs(dq) > self.config.max_dq_ndob)
-        dq_clipped=dq  # we bypass the clipping  derivative of M is not taken zero
+        #dq_clipped=  # we bypass the clipping  derivative of M is not taken zero
         # Get dynamics matrices at current state
         # NOTE: Coriolis uses clipped velocity to prevent observer wind-up
         C = self.dynamics.get_coriolis_matrix(q, dq_clipped)
         G = self.dynamics.get_gravity_vector(q)
         # 2. Get the exact analytical M_dot
-        M_dot = self.dynamics.get_M_dot(q, dq)
+        M_dot = self.dynamics.get_M_dot(q, dq_clipped)
         # Compute auxiliary function p(q, dq_clipped) = L * M(q) * dq_clipped
         # CRITICAL: Use clipped velocity for p to prevent momentum term from spiking
         p = self._compute_auxiliary_p(q, dq_clipped)
@@ -409,7 +409,7 @@ class NonlinearDisturbanceObserver:
         #   = -Lz + L*C*dq + L*G - L*(τ - M*ddq_ref) - L*p
         # 4. The Exact Mohammadi (2017) Observer Dynamics:
         # ż = -Lz + L[C*dq + G - τ - p - M_dot*dq]
-        mdot_term = M_dot @ dq
+        mdot_term = M_dot @ dq_clipped
         inner_term = coriolis_term + G - tau - p - mdot_term  # mdot_term  not zero. modified 26/03/2026
         z_dot = -self._L @ self._z + self._L @ inner_term
         self._last_z_dot = z_dot.copy()
