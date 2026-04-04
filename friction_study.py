@@ -78,7 +78,7 @@ if(1):
     v_s       = 0.05,    # Stribeck velocity threshold    [rad/s] (transition knee)
     b         = 0.02,    # Viscous friction coefficient   [N.m.s/rad]
     alpha     = 2.0,     # Stribeck exponent: 1=linear, 2=Gaussian. SET TO 2.0 to match LuGre.
-    v_epsilon = 0.01,    # tanh smoothing half-width      [rad/s] (smaller = sharper stick-slip)
+    v_epsilon = 0.001,    # tanh smoothing half-width      [rad/s] (smaller = sharper stick-slip)
 )
 # for elevation gimbal
 if(0):
