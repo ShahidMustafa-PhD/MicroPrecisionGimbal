@@ -763,14 +763,13 @@ class FeedbackLinearizationController(BaseController):
         else:
             nominal_fric = np.array([self.friction_az, self.friction_el]) * dq
 
-# Apply conditional gating (CRITICAL for NDOB stability)
-        if (1): #self.conditional_friction:
+        # Apply conditional gating (CRITICAL for NDOB stability)
+        if self.conditional_friction:
             desired_accel_sign = np.sign(v)
             velocity_sign = np.sign(dq)
             aligned = (desired_accel_sign * velocity_sign) >= 0
             viscous_only = np.array([self.friction_az, self.friction_el]) * dq
             friction_comp = np.where(aligned, nominal_fric, viscous_only)
-            
         else:
             friction_comp = nominal_fric
 
