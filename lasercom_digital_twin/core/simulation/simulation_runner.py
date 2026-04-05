@@ -112,6 +112,12 @@ class SimulationConfig:
     use_tustin_friction: bool = False        # Selection of Tustin friction in simulation systems
     use_lugre_friction: bool = False         # Selection of LuGre dynamic friction in simulation (overrides Tustin if both True)
 
+    # Simple viscous friction model configuration (used when Tustin and LuGre are both disabled)
+    viscous_config: Dict = field(default_factory=lambda: {
+        'friction_az': 0.1,    # Azimuth viscous friction coefficient [N·m·s/rad]
+        'friction_el': 0.1,    # Elevation viscous friction coefficient [N·m·s/rad]
+    })
+
     # LuGre Dynamic Friction Model configuration
     # Unlike Tustin (algebraic), LuGre has internal bristle state z that must be integrated.
     # The bristle dynamics dz/dt = v - sigma_0*|v|*z/g(v) create history-dependent friction
@@ -130,6 +136,33 @@ class SimulationConfig:
         'v_s_az': 0.05,            # Stribeck velocity Az [rad/s]
         'v_s_el': 0.05,            # Stribeck velocity El [rad/s]
         'lugre_max_dt': 1e-4,      # Max bristle integration timestep [s] — drives adaptive sub-stepping
+    })
+
+    # Tustin (Smoothed Stribeck) Friction Model configuration
+    tustin_config: Dict = field(default_factory=lambda: {
+        # ── Plant friction (true physical values) ────────────────────────────
+        'tau_s_az': 0.25,          # Static friction Az [N·m]
+        'tau_s_el': 0.18,          # Static friction El [N·m]
+        'tau_c_az': 0.15,          # Coulomb friction Az [N·m]
+        'tau_c_el': 0.10,          # Coulomb friction El [N·m]
+        'v_s_az': 0.05,            # Stribeck velocity Az [rad/s]
+        'v_s_el': 0.05,            # Stribeck velocity El [rad/s]
+        'b_az': 0.02,              # Viscous damping Az [N·m·s/rad]
+        'b_el': 0.015,             # Viscous damping El [N·m·s/rad]
+        'v_epsilon': 0.05,         # Smoothing velocity threshold [rad/s] (prevents chattering)
+        # ── Controller nominal friction (ideal: matches plant exactly) ──────────
+        # For robustness studies, reduce these to ~80% of plant truth and set
+        # nominal_friction_noise_pct > 0 to simulate imperfect identification.
+        'nominal_tau_c_az': 0.15,  # Matches plant tau_c_az [N·m]
+        'nominal_tau_c_el': 0.10,  # Matches plant tau_c_el [N·m]
+        'nominal_tau_s_az': 0.25,  # Matches plant tau_s_az [N·m]
+        'nominal_tau_s_el': 0.18,  # Matches plant tau_s_el [N·m]
+        'nominal_v_s_az': 0.05,    # Matches plant v_s_az [rad/s]
+        'nominal_v_s_el': 0.05,    # Matches plant v_s_el [rad/s]
+        'nominal_v_epsilon': 0.05, # Smoothing threshold for nominal model [rad/s]
+        # ── Measurement noise on nominal parameters ───────────────────────────
+        # Set > 0 to simulate imperfect friction identification (robustness study).
+        'nominal_friction_noise_pct': 0.0,   # 0 % = ideal (no perturbation)
     })
 
     # Component configs
@@ -291,6 +324,11 @@ class SimulationState:
     friction_lugre_torque_az: float = 0.0  # LuGre friction torque Az [N·m]
     friction_lugre_torque_el: float = 0.0  # LuGre friction torque El [N·m]
 
+    # Friction compensation (from FBL controller meta — zero for PID)
+    friction_comp_az: float = 0.0  # Friction compensation Az [N·m]
+    friction_comp_el: float = 0.0  # Friction compensation El [N·m]
+    tau_friction_az: float = 0.0       #  Bearing friction (applied) torque Az [N·m] (for logging/diagnostics)
+    tau_friction_el: float = 0.0       #  Bearing friction (applied) torque El [N·m] (for logging/diagnostics)
     # EKF Diagnostics (covariance, innovation, adaptive tuning)
     ekf_cov_theta_az: float = 0.0         # State covariance P[0,0] (θ_Az) [rad²]
     ekf_cov_theta_dot_az: float = 0.0     # State covariance P[1,1] (θ̇_Az) [(rad/s)²]
@@ -365,18 +403,20 @@ class DigitalTwinRunner:
         self.cm_r = dynamics_cfg.get('cm_r', 0.0)    # Zero CM offset by default
         self.cm_h = dynamics_cfg.get('cm_h', 0.0)    # Zero CM offset by default
         self.gravity = dynamics_cfg.get('gravity', 9.81)
-        self.friction_az = dynamics_cfg.get('friction_az', 0.1)
-        self.friction_el = dynamics_cfg.get('friction_el', 0.1)
+        viscous_cfg = self.config.viscous_config or {}
+        self.friction_az = viscous_cfg.get('friction_az', 0.1)
+        self.friction_el = viscous_cfg.get('friction_el', 0.1)
 
         # Initialize Tustin Friction Model (High-Fidelity Nonlinear Friction)
+        tustin_cfg = self.config.tustin_config or {}
         self.tustin_friction_model = SmoothedTustinFriction(
-            tau_s=[0.25, 0.18],
-            tau_c=[0.15, 0.10],
-            v_s=[0.05, 0.05],
-            b=[0.02, 0.015],
-            v_epsilon=0.05  # CRITICAL FIX: Add this to prevent numerical chattering
+            tau_s=[tustin_cfg.get('tau_s_az', 0.25), tustin_cfg.get('tau_s_el', 0.18)],
+            tau_c=[tustin_cfg.get('tau_c_az', 0.15), tustin_cfg.get('tau_c_el', 0.10)],
+            v_s=[tustin_cfg.get('v_s_az', 0.05),   tustin_cfg.get('v_s_el', 0.05)],
+            b=[tustin_cfg.get('b_az', 0.02),        tustin_cfg.get('b_el', 0.015)],
+            v_epsilon=tustin_cfg.get('v_epsilon', 0.05)  # Prevents numerical chattering
         )
-        
+
         self.use_tustin_friction = self.config.use_tustin_friction
 
         # Initialize LuGre Dynamic Friction Model
@@ -434,20 +474,11 @@ class DigitalTwinRunner:
             gravity=self.gravity
         )
 
-        # Create dynamics instance for simulation
-        # For PRODUCTION: Use the SAME model as the controller to ensure FBL+NDOB works
-        # For TESTING mismatch robustness: Uncomment the alternative below
-        #self.dynamics_sim = self.dynamics  # Same model (production config)
-        
-        # ALTERNATIVE: Mismatched model for robustness testing
-        if(1):
-            self.dynamics_sim = GimbalDynamics(
-             pan_mass=self.pan_mass+0.25,  # Slight mismatch for realism
-             tilt_mass=self.tilt_mass+0.25,
-             cm_r=self.cm_r+0.002,
-             cm_h=self.cm_h+0.005,
-             gravity=self.gravity
-         )
+        # Create dynamics instance for simulation.
+        # IDEAL CONDITIONS: plant and controller share the same GimbalDynamics instance.
+        # To test robustness to model mismatch, replace this with a separate GimbalDynamics
+        # with perturbed parameters (e.g. pan_mass*1.1, cm_r+0.002).
+        self.dynamics_sim = self.dynamics  # Same model — no plant/controller mismatch
         
         # Compute inertias from mass matrix at zero position (q=0)
         # For a 2-DOF gimbal, inertia_az = M[0,0] and inertia_el = M[1,1] at q=0
@@ -738,9 +769,46 @@ class DigitalTwinRunner:
                 'tau_max': [10.0, 10.0],
                 'tau_min': [-10.0, -10.0]
             }
-            # Inject global friction selection into controller config
-            fl_config['use_tustin_friction'] = self.config.use_tustin_friction
-            
+            # The FBL controller always uses its internal Tustin model for friction
+            # feedforward regardless of what the plant uses. When the plant runs LuGre,
+            # this creates the deliberate plant-model mismatch that is the research focus:
+            # the controller compensates with a memoryless Stribeck map while the plant
+            # generates history-dependent bristle friction — the residual is what the
+            # NDOB must estimate. Setting this True for both Tustin and LuGre plant modes.
+            fl_config['use_tustin_friction'] = (self.config.use_tustin_friction or
+                                                self.config.use_lugre_friction)
+
+            # Inject viscous friction coefficients so the FBL controller's nominal_fric
+            # computation (line 764) uses the same values as the plant.
+            _vc = self.config.viscous_config or {}
+            fl_config['friction_az'] = _vc.get('friction_az', 0.1)
+            fl_config['friction_el'] = _vc.get('friction_el', 0.1)
+            # The FBL controller always uses its internal Tustin model for friction
+            # feedforward regardless of what the plant uses. When the plant runs LuGre,
+            # this creates the deliberate plant-model mismatch that is the research focus:
+            # the controller compensates with a memoryless Stribeck map while the plant
+            # generates history-dependent bristle friction — the residual is what the
+            # NDOB must estimate. Setting this True for both Tustin and LuGre plant modes.
+            fl_config['use_tustin_friction'] = (self.config.use_tustin_friction or
+                                                self.config.use_lugre_friction)
+            # Inject nominal friction parameters (with ±noise_pct perturbation) into
+            # fl_config so the FBL controller reads them instead of hardcoded values.
+            # The nudge simulates imperfect friction identification (measurement error).
+            _tc = self.config.tustin_config or {}
+            _noise_pct = _tc.get('nominal_friction_noise_pct', 0.20)
+            _rng = np.random.default_rng(self.config.seed)
+
+            def _nudge(val: float) -> float:
+                return val * (1.0 + _rng.uniform(-_noise_pct, _noise_pct))
+
+            fl_config['nominal_tau_c_az']  = _nudge(_tc.get('nominal_tau_c_az',  0.12))
+            fl_config['nominal_tau_c_el']  = _nudge(_tc.get('nominal_tau_c_el',  0.08))
+            fl_config['nominal_tau_s_az']  = _nudge(_tc.get('nominal_tau_s_az',  0.20))
+            fl_config['nominal_tau_s_el']  = _nudge(_tc.get('nominal_tau_s_el',  0.15))
+            fl_config['nominal_v_s_az']    = _nudge(_tc.get('nominal_v_s_az',    0.0005))
+            fl_config['nominal_v_s_el']    = _nudge(_tc.get('nominal_v_s_el',    0.0005))
+            fl_config['nominal_v_epsilon'] = _tc.get('nominal_v_epsilon', 0.05)  # no nudge
+
             self.coarse_controller = FeedbackLinearizationController(
                 fl_config, 
                 self.gimbal_dynamics,
@@ -1029,6 +1097,7 @@ class DigitalTwinRunner:
             # reversals. The sub-stepping loop ensures numerical stability when bristle
             # stiffness sigma_0 is high (natural freq ~ sqrt(sigma_0/sigma_1) can reach kHz).
             if self.use_lugre_friction:
+                
                 # Velocity-adaptive sub-stepping for Forward Euler bristle stability.
                 #
                 # The bristle ODE is linear in z: dz/dt = v - K(v)*z,
@@ -1063,9 +1132,14 @@ class DigitalTwinRunner:
                 self.state.friction_lugre_torque_el = tau_friction[1]
 
             elif self.use_tustin_friction:
+                
                 # High-fidelity nonlinear friction (algebraic, memoryless)
                 tau_friction = self.tustin_friction_model(np.array([self.qd_az, self.qd_el]))
+                  # Save friction components for logging/diagnostics
+                self.state.friction_tustin_torque_az = tau_friction[0]
+                self.state.friction_tustin_torque_el = tau_friction[1]
             else:
+                
                 # Simple viscous friction
                 tau_friction = np.array([
                     self.friction_az * self.qd_az,
@@ -1075,8 +1149,8 @@ class DigitalTwinRunner:
             tau_net = tau_motor - tau_friction + tau_disturbance
 
             # Save friction components for logging/diagnostics
-            self.state.friction_tustin_torque_az = tau_friction[0]
-            self.state.friction_tustin_torque_el = tau_friction[1]
+            self.state.tau_friction_az = tau_friction[0]
+            self.state.tau_friction_el = tau_friction[1]
 
             # 4. Compute Accelerations via Inverted Mass Matrix
             # q̈ = M⁻¹(τ_net - C·q̇ - G)
@@ -1371,6 +1445,8 @@ class DigitalTwinRunner:
         self.state.d_hat_ndob_az = d_hat_ndob[0] if len(d_hat_ndob) > 0 else 0.0
         self.state.d_hat_ndob_el = d_hat_ndob[1] if len(d_hat_ndob) > 1 else 0.0
         
+       
+
         # Extract NDOB velocity clipping status (if present)
         if hasattr(self.coarse_controller, 'ndob') and self.coarse_controller.ndob is not None:
             ndob_diag = self.coarse_controller.ndob.get_diagnostics()
@@ -1625,6 +1701,21 @@ class DigitalTwinRunner:
             self.log_data['lugre_dz_dt_el'].append(float(self.state.lugre_dz_dt_el))
             self.log_data['friction_lugre_torque_az'].append(float(self.state.friction_lugre_torque_az))
             self.log_data['friction_lugre_torque_el'].append(float(self.state.friction_lugre_torque_el))
+            self.log_data['tau_friction_az'].append(float(self.state.tau_friction_az))
+            self.log_data['tau_friction_el'].append(float(self.state.tau_friction_el))
+            
+            # Total friction cancellation = feedforward + NDOB correction.
+            # For PID: both terms are zero.
+            # For FBL: friction_comp is the Tustin feedforward; d_hat_ndob is zero (no NDOB).
+            # For FBL+NDOB: friction_comp + d_hat_ndob gives the full cancellation torque,
+            #   which is the correct quantity to compare against tau_friction in the plot.
+            fc         = self.last_coarse_meta.get('friction_comp', np.zeros(2))
+            d_hat_ndob = self.last_coarse_meta.get('d_hat_ndob',   np.zeros(2))
+            fc_total   = np.asarray(fc) + np.asarray(d_hat_ndob)
+            self.state.friction_comp_az = float(fc_total[0])
+            self.state.friction_comp_el = float(fc_total[1])
+            self.log_data['friction_comp_az'].append(float(self.state.friction_comp_az))
+            self.log_data['friction_comp_el'].append(float(self.state.friction_comp_el))
 
             # Virtual control signal v (outer loop commanded acceleration)
             v_sig = self.last_coarse_meta.get('v_signal', np.zeros(2))
