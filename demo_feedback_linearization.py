@@ -736,12 +736,12 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
     # Common test parameters
     target_az_deg = 0
     target_el_deg = 0
-    duration = 1 # Increased to show full wave periods
+    duration = 4 # Increased to show full wave periods
     
     # Signal characteristics
     target_amplitude = 30.0 # degrees
     target_period = 15   # seconds
-    target_reachangle = 2  # degrees - for hybridsig only
+    target_reachangle = 5  # degrees - for hybridsig only
     
     # =============================================================================
     # Environmental Disturbance Configuration
@@ -915,7 +915,7 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
     print("-" * 80)
     
     config_pid = SimulationConfig(
-        dt_sim=0.001,
+        dt_sim=0.0001,
         dt_coarse=0.01,
         dt_fine=0.00001,
         dt_qpd=0.00001,
@@ -972,7 +972,7 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
     print("-" * 80)
     
     config_fl = SimulationConfig(
-        dt_sim=0.001,
+        dt_sim=0.0001,
         dt_coarse=0.01,
         dt_fine=0.00001,
         dt_qpd=0.00001,
@@ -1236,7 +1236,7 @@ if __name__ == '__main__':
             'turbulence_intensity': 0.25, # σ_u/V_mean ratio (0.1=light, 0.2=moderate)
             'mean_velocity': 8.0,         # Mean wind speed V_mean [m/s]
             'direction_deg': 45.0,        # Wind direction (affects both axes)
-            'start_time': 6.0             # Delay onset [s]
+            'start_time': 2.0             # Delay onset [s]
         },
         'vibration': {
             'enabled': False,

@@ -577,25 +577,22 @@ class FeedbackLinearizationController(BaseController):
 
         # Nonlinear Feedforward Friction Model (Nominal / Intentionally Underestimated)
         # ─────────────────────────────────────────────────────────────────────────────
-        # The plant uses: τ_fric = SmoothedTustinFriction(τ_s=[0.25,0.18], τ_c=[0.15,0.10], …)
-        # This controller uses UNDERESTIMATED parameters so the residual mismatch is
-        # non-zero and measurable. The NDOB then estimates and cancels this residual,
-        # demonstrating its value. Using exact parameters would make the NDOB redundant.
-        #
-        # Residual seen by NDOB ≈ τ_plant_fric − friction_comp  (should be small but non-zero)
+        # Parameters come from tustin_config.nominal_* (set in SimulationConfig) and are
+        # pre-nudged ±nominal_friction_noise_pct by the runner to simulate imperfect
+        # friction identification. Residual seen by NDOB ≈ τ_plant_fric − friction_comp.
         self.nominal_friction_model = SmoothedTustinFriction(
-            tau_c=[0.12, 0.08],     # Underestimated from true plant: [0.15, 0.10]
-            tau_s=[0.20, 0.15],     # Underestimated from true plant: [0.25, 0.18]
-            v_s=[0.05, 0.05],
-            b=[self.friction_az, self.friction_el],  # Viscous part matches config
-            v_epsilon=0.05          # Slightly wider smoothing for numerical stability
+            tau_c=[config.get('nominal_tau_c_az', 0.12), config.get('nominal_tau_c_el', 0.08)],
+            tau_s=[config.get('nominal_tau_s_az', 0.20), config.get('nominal_tau_s_el', 0.15)],
+            v_s=[config.get('nominal_v_s_az', 0.05),   config.get('nominal_v_s_el', 0.05)],
+            b=[config.get('b_az', 0.02),   config.get('b_el', 0.015)],       # Viscous part from dynamics config
+            v_epsilon=config.get('nominal_v_epsilon', 0.05)
         )
 
         # Conditional friction compensation (CRITICAL for stability)
         # When True, only compensate friction if velocity is in same direction as desired acceleration
         # This prevents friction feedforward from fighting the controller during transients
         self.conditional_friction = config.get('conditional_friction', True)
-        self.use_tustin_friction = config.get('use_tustin_friction', True)
+        self.use_tustin_friction = config.get('use_tustin_friction', False) or config.get('use_lugre_friction', False) 
         # Robust/Sliding Mode Term (handles model uncertainty)
         # Adds a switching term: -eta * sign(s) where s = error_dot + lambda * error
         # This provides robustness to unmodeled dynamics and parameter variations
@@ -760,23 +757,23 @@ class FeedbackLinearizationController(BaseController):
         # The intentional model mismatch (underestimated τ_s, τ_c) leaves a residual that
         # the NDOB estimates and passes back via d_hat_ndob, completing the compensation loop.
   
-        #if self.conditional_friction:
-        if not self.use_tustin_friction:
-            desired_accel_sign = np.sign(v)       # Direction of commanded virtual acceleration
-            velocity_sign     = np.sign(dq)       # Direction of current joint motion
-            aligned = (desired_accel_sign * velocity_sign) >= 0  # Element-wise
-
-            # Full nonlinear friction from nominal (underestimated) Tustin model
+        # Compute friction from the appropriate model
+        if self.use_tustin_friction:
             nominal_fric = self.nominal_friction_model(dq)
-            friction_coeff = np.array([self.friction_az, self.friction_el])
-            # Viscous fallback: only b*dq (no Coulomb/stiction) when opposing
-            viscous_only = np.array([self.friction_az, self.friction_el]) * dq
-            friction_comp = np.where(aligned, friction_coeff * dq, np.zeros(2))
-            # Select per-axis: full compensation when aligned, viscous-only when opposing
-            #friction_comp = np.where(aligned, nominal_fric, viscous_only)
         else:
-            # Unconditional: always apply the full nonlinear friction estimate
-            friction_comp = self.nominal_friction_model(dq)
+            nominal_fric = np.array([self.friction_az, self.friction_el]) * dq
+
+# Apply conditional gating (CRITICAL for NDOB stability)
+        if (1): #self.conditional_friction:
+            desired_accel_sign = np.sign(v)
+            velocity_sign = np.sign(dq)
+            aligned = (desired_accel_sign * velocity_sign) >= 0
+            viscous_only = np.array([self.friction_az, self.friction_el]) * dq
+            friction_comp = np.where(aligned, nominal_fric, viscous_only)
+            
+        else:
+            friction_comp = nominal_fric
+
         if self.enable_robust_term:
             s = error_dot + self.robust_lambda * error
             u_robust = -self.robust_eta * np.tanh(s / self.robust_epsilon)
