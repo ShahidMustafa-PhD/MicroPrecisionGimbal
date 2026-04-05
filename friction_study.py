@@ -76,9 +76,9 @@ if(1):
     tau_c     = 0.15,    # Coulomb friction magnitude     [N.m]   (plateau at high speed)
     tau_s     = 0.25,    # Static friction / stiction     [N.m]   (breakaway; must >= tau_c)
     v_s       = 0.05,    # Stribeck velocity threshold    [rad/s] (transition knee)
-    b         = 0.02,    # Viscous friction coefficient   [N.m.s/rad]
+    b         = 0.1,    # Viscous friction coefficient   [N.m.s/rad]
     alpha     = 2.0,     # Stribeck exponent: 1=linear, 2=Gaussian. SET TO 2.0 to match LuGre.
-    v_epsilon = 0.001,    # tanh smoothing half-width      [rad/s] (smaller = sharper stick-slip)
+    v_epsilon = 0.05,    # tanh smoothing half-width      [rad/s] (smaller = sharper stick-slip)
 )
 # for elevation gimbal
 if(0):
@@ -104,7 +104,7 @@ if(1):
  LUGRE = dict(
     sigma_0 = 1.0e4,   # Bristle stiffness              [N.m/rad]     — higher = faster transient
     sigma_1 = 1.0,     # Bristle micro-damping          [N.m.s/rad]   — higher = more overdamped
-    sigma_2 = 0.02,    # Viscous coefficient            [N.m.s/rad]   — SET EQUAL TO Tustin b
+    sigma_2 = 0.1,    # Viscous coefficient            [N.m.s/rad]   — SET EQUAL TO Tustin b
     tau_c   = 0.15,    # Coulomb friction               [N.m]         — SET EQUAL TO Tustin tau_c
     tau_s   = 0.25,    # Static friction                [N.m]         — SET EQUAL TO Tustin tau_s
     v_s     = 0.05,    # Stribeck velocity              [rad/s]       — SET EQUAL TO Tustin v_s
@@ -446,10 +446,10 @@ def compute_energy_vs_frequency(freqs_hz: list, amplitude: float,
 _C = dict(
     tustin  = "#0072B2",   # deep blue   — Tustin / algebraic
     lugre   = "#D55E00",   # vermillion  — LuGre dynamic
-    visc    = "#999999",   # mid-grey    — viscous reference
+    visc    = "#8F0B0B",   # mid-grey    — viscous reference
     env     = "#009E73",   # teal-green  — Stribeck envelope / g(v)
     resid   = "#CC79A7",   # mauve       — residual / error
-    ref     = "#BBBBBB",   # light-grey  — neutral reference lines
+    ref     = "#190879",   # light-grey  — neutral reference lines
 )
 
 def _despine(ax):
@@ -474,7 +474,7 @@ def _guard_ylim(ax, min_span=0.01):
 
 def _panel_label(ax, letter):
     """Place a bold panel label (a), (b)... centred below the x-axis."""
-    ax.text(0.5, -0.22, f"({letter})",
+    ax.text(0.5, -0.25, f"({letter})",
             transform=ax.transAxes,
             fontsize=10, fontweight='bold',
             va='top', ha='center',
@@ -526,9 +526,9 @@ def _build_panels(tustin_p, lugre_p, issues, metrics):
 
     gs = gridspec.GridSpec(
         2, 2, figure=fig,
-        hspace=0.62, wspace=0.38,
+        hspace=0.62, wspace=0.25,
         left=0.08, right=0.96,
-        top=0.93, bottom=0.10,
+        top=0.93, bottom=0.20,
     )
 
     ax_main  = fig.add_subplot(gs[0, 0])
@@ -539,11 +539,11 @@ def _build_panels(tustin_p, lugre_p, issues, metrics):
     # ---- Suptitle ----
     ss_status = "Steady-state match: confirmed" if match_ok \
                 else "Steady-state match: FAILED — see parameter table"
-    fig.suptitle(
-        rf"Friction Model Stribeck Comparison — {AXIS_LABEL} $\;|\;$ {ss_status}",
-        fontsize=10.5, fontweight='bold', color=match_col,
-        y=0.975,
-    )
+    #fig.suptitle(
+       # rf"Friction Model Stribeck Comparison — {AXIS_LABEL} $\;|\;$ {ss_status}",
+       # fontsize=10.5, fontweight='bold', color=match_col,
+       # y=0.975,
+    #)
 
     # ---- Pre-compute all curves ----
     v_full = np.linspace(-V_MAX, V_MAX, N_SWEEP)
@@ -581,14 +581,14 @@ def _build_panels(tustin_p, lugre_p, issues, metrics):
         ax.axhline(yval, color=_C['ref'], lw=0.7, ls='--', zorder=1)
         if lbl:
             ax.text(V_MAX * 1.01, yval, lbl,
-                    fontsize=8, color='#555555', va='center', ha='left',
+                    fontsize=11, color='#555555', va='center', ha='left',
                     clip_on=False)
 
     # Stribeck velocity markers
     ax.axvline( v_s, color=_C['ref'], lw=0.7, ls='--', zorder=1)
     ax.axvline(-v_s, color=_C['ref'], lw=0.7, ls='--', zorder=1)
     ax.text(v_s + V_MAX * 0.015, ax.get_ylim()[0] if ax.get_ylim()[0] < 0 else -0.04,
-            r'$v_s$', fontsize=8, color='#777777', va='top')
+            r'$v_s$', fontsize=11, color='#777777', va='top')
 
     ax.plot(v_full, tau_visc,    color=_C['visc'],   lw=1.2, ls=(0,(4,3)), zorder=2,
             label=r'Viscous ($b\,\omega$)')
@@ -634,9 +634,9 @@ def _build_panels(tustin_p, lugre_p, issues, metrics):
 
     # Label tau_c and tau_s at right edge
     ax.text(V_ZOOM_MAX * 1.01, tustin_p['tau_c'], r'$\tau_c$',
-            fontsize=8, color='#555555', va='center', ha='left', clip_on=False)
+            fontsize=11, color='#555555', va='center', ha='left', clip_on=False)
     ax.text(V_ZOOM_MAX * 1.01, tustin_p['tau_s'], r'$\tau_s$',
-            fontsize=8, color='#555555', va='center', ha='left', clip_on=False)
+            fontsize=11, color='#555555', va='center', ha='left', clip_on=False)
 
     ax.set_xlabel(r'Angular velocity, $\omega$ (rad s$^{-1}$)')
     ax.set_ylabel(r'Friction torque, $\tau_f$ (N$\cdot$m)')
@@ -700,9 +700,9 @@ def _build_panels(tustin_p, lugre_p, issues, metrics):
 
     # Labels at right edge
     ax.text(V_MAX * 1.01, lugre_p['tau_c'], r'$\tau_c$',
-            fontsize=8, color='#555555', va='center', ha='left', clip_on=False)
+            fontsize=11, color='#555555', va='center', ha='left', clip_on=False)
     ax.text(V_MAX * 1.01, lugre_p['tau_s'], r'$\tau_s$',
-            fontsize=8, color='#555555', va='center', ha='left', clip_on=False)
+            fontsize=11, color='#555555', va='center', ha='left', clip_on=False)
 
     ax.set_xlabel(r'Angular velocity, $\omega$ (rad s$^{-1}$)')
     ax.set_ylabel(r'Stribeck envelope (N$\cdot$m)')
