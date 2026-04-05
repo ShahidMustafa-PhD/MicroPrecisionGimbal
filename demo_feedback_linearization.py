@@ -849,16 +849,19 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
         'v_epsilon': 0.05,   # Smoothing threshold [rad/s] (prevents chattering)
         # ── Controller nominal friction (intentionally underestimated) ────────
         # Simulates imperfect friction identification. The NDOB compensates the residual.
-        # Runner applies ±nominal_friction_noise_pct perturbation for realism.
-        'nominal_tau_s_az': 0.25,   # ~80 % of plant tau_s_az
-        'nominal_tau_s_el': 0.18,   # ~83 % of plant tau_s_el
-        'nominal_tau_c_az': 0.15,   # ~80 % of plant tau_c_az
-        'nominal_tau_c_el': 0.10,   # ~80 % of plant tau_c_el
+        # Runner applies ±nominal_friction_noise_pct perturbation around these baselines.
+        # These are intentionally ~80% of the true plant values so the controller
+        # systematically under-compensates friction; the NDOB estimates the residual.
+        # Line 791 of simulation_runner.py applies the random nudge on top.
+        'nominal_tau_s_az': 0.20,   # ~80 % of plant tau_s_az=0.25  [N·m]
+        'nominal_tau_s_el': 0.15,   # ~83 % of plant tau_s_el=0.18  [N·m]
+        'nominal_tau_c_az': 0.12,   # ~80 % of plant tau_c_az=0.15  [N·m]
+        'nominal_tau_c_el': 0.08,   # ~80 % of plant tau_c_el=0.10  [N·m]
   
         'nominal_v_s_az': 0.05,   # Controller Stribeck velocity Az [rad/s]
         'nominal_v_s_el': 0.05,   # Controller Stribeck velocity El [rad/s]
         'nominal_v_epsilon': 0.05,  # Smoothing threshold for nominal model [rad/s]
-        'nominal_friction_noise_pct': 0.20,  # ±20 % uniform perturbation (measurement error)
+        'nominal_friction_noise_pct': 0.020,  # ±20 % uniform perturbation (measurement error)
     }
 
     # LuGre parameters matched to Tustin for a controlled comparison.
