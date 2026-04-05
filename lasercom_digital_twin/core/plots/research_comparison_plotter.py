@@ -234,7 +234,9 @@ class ResearchComparisonPlotter:
         self.figures['fig14_stroke_metrics'] = self._plot_stroke_consumption()
         self.figures['fig15_stroke_summary'] = self._plot_stroke_margin_summary()
         self.figures['fig16_benchmark_table'] = self._plot_benchmark_table()
-        
+        self.figures['fig17_friction_comp'] = self._plot_friction_compensation()
+        self.figures['fig18_friction_all']  = self._plot_friction_comparison_all()
+
         # Save figures FIRST (before making interactive) to get clean PDFs without buttons
         if self.save_figures:
             self._save_all_figures()
@@ -265,8 +267,10 @@ class ResearchComparisonPlotter:
                 'fig13_statistics': self.figures['fig13_statistics'].get_axes(),
                 'fig14_stroke_metrics': self.figures['fig14_stroke_metrics'].get_axes(),
                 'fig15_stroke_summary': self.figures['fig15_stroke_summary'].get_axes(),
+                'fig17_friction_comp': self.figures['fig17_friction_comp'].get_axes(),
+                'fig18_friction_all':  self.figures['fig18_friction_all'].get_axes(),
             }
-            
+
             for fig_name, axes in fig_axes_map.items():
                 if fig_name in self.figures:
                     manager = self._make_figure_interactive(
@@ -498,11 +502,13 @@ class ResearchComparisonPlotter:
         ax2.grid(True, alpha=self.style.grid_alpha, linestyle=self.style.grid_linestyle)
         
         # NDOB Disturbance Estimate - Azimuth
-        friction_coef = 0.1
         if 'd_hat_ndob_az' in self._results_ndob['log_arrays']:
             d_hat_az = self._results_ndob['log_arrays']['d_hat_ndob_az']
-            dq_az = self._results_ndob['log_arrays']['qd_az']
-            d_true_az = friction_coef * dq_az
+            # Use computed friction from simulation state as Ground Truth
+            # Ensure it is an array for plotting (even if it's a scalar fallback)
+            d_true_az = self._results_ndob['log_arrays'].get('friction_tustin_torque_az', 0.0)
+            if np.isscalar(d_true_az):
+                d_true_az = np.full_like(self._t_ndob, d_true_az)
             
             ax3.plot(self._t_ndob, d_hat_az, color=ControllerColors.FBL_NDOB,
                      linewidth=lw, label='NDOB Estimate', alpha=alpha)
@@ -522,8 +528,11 @@ class ResearchComparisonPlotter:
         # NDOB Disturbance Estimate - Elevation
         if 'd_hat_ndob_el' in self._results_ndob['log_arrays']:
             d_hat_el = self._results_ndob['log_arrays']['d_hat_ndob_el']
-            dq_el = self._results_ndob['log_arrays']['qd_el']
-            d_true_el = friction_coef * dq_el
+            # Use computed friction from simulation state as Ground Truth
+            # Ensure it is an array for plotting (even if it's a scalar fallback)
+            d_true_el = self._results_ndob['log_arrays'].get('friction_tustin_torque_el', 0.0)
+            if np.isscalar(d_true_el):
+                d_true_el = np.full_like(self._t_ndob, d_true_el)
             
             ax4.plot(self._t_ndob, d_hat_el, color=ControllerColors.FBL_NDOB,
                      linewidth=lw, label='NDOB Estimate', alpha=alpha)
@@ -1655,10 +1664,128 @@ class ResearchComparisonPlotter:
 
         return fig
 
+    def _plot_friction_compensation(self) -> plt.Figure:
+        """Figure 17: Friction Compensation vs True LuGre Friction + Velocity (FBL+NDOB only)."""
+        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=self.style.get_figure_size('2x1'),
+                                       constrained_layout=self._get_layout_mode())
+
+        t = self._t_ndob
+        log = self._results_ndob['log_arrays']
+
+        fc_az  = np.array(log.get('friction_comp_az',  np.zeros(len(t))))
+        fc_el  = np.array(log.get('friction_comp_el',  np.zeros(len(t))))
+        tau_az = np.array(log.get('tau_friction_az',   np.zeros(len(t))))
+        tau_el = np.array(log.get('tau_friction_el',   np.zeros(len(t))))
+        qd_az  = np.array(log.get('qd_az',             np.zeros(len(t))))
+        qd_el  = np.array(log.get('qd_el',             np.zeros(len(t))))
+
+        lw    = self.style.linewidth_primary
+        alpha = self.style.alpha_primary
+        vel_color = '#e67e22'  # orange — distinct from torque lines
+
+        # --- Azimuth ---
+        ax1.plot(t, tau_az, color=ControllerColors.GROUND_TRUTH, linewidth=lw,
+                 linestyle='--', label=r'$\tau_{\mathrm{friction}}$ (Applied)', alpha=alpha)
+        ax1.plot(t, fc_az,  color=ControllerColors.FBL_NDOB,     linewidth=lw,
+                 label=r'$\hat{\tau}_{\mathrm{comp}}$ (FBL+NDOB)', alpha=alpha)
+        ax1.set_ylabel(r'Torque [N$\cdot$m]')
+        ax1.set_title('Azimuth')
+        ax1.grid(True, alpha=0.3)
+
+        ax1v = ax1.twinx()
+        ax1v.plot(t, np.rad2deg(qd_az), color=vel_color, linewidth=lw * 0.85,
+                  linestyle=':', alpha=0.75, label=r'$\dot{q}_{az}$ (FBL+NDOB)')
+        ax1v.set_ylabel(r'Velocity [deg/s]', color=vel_color)
+        ax1v.tick_params(axis='y', labelcolor=vel_color)
+
+        # Combined legend from both axes
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines1v, labels1v = ax1v.get_legend_handles_labels()
+        ax1.legend(lines1 + lines1v, labels1 + labels1v,
+                   loc='best', fontsize=self.style.legend_fontsize)
+
+        # --- Elevation ---
+        ax2.plot(t, tau_el, color=ControllerColors.GROUND_TRUTH, linewidth=lw,
+                 linestyle='--', label=r'$\tau_{\mathrm{friction}}$ (Applied)', alpha=alpha)
+        ax2.plot(t, fc_el,  color=ControllerColors.FBL_NDOB,     linewidth=lw,
+                 label=r'$\hat{\tau}_{\mathrm{comp}}$ (FBL+NDOB)', alpha=alpha)
+        ax2.set_ylabel(r'Torque [N$\cdot$m]')
+        ax2.set_xlabel(r'Time [s]')
+        ax2.set_title('Elevation')
+        ax2.grid(True, alpha=0.3)
+
+        ax2v = ax2.twinx()
+        ax2v.plot(t, np.rad2deg(qd_el), color=vel_color, linewidth=lw * 0.85,
+                  linestyle=':', alpha=0.75, label=r'$\dot{q}_{el}$ (FBL+NDOB)')
+        ax2v.set_ylabel(r'Velocity [deg/s]', color=vel_color)
+        ax2v.tick_params(axis='y', labelcolor=vel_color)
+
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        lines2v, labels2v = ax2v.get_legend_handles_labels()
+        ax2.legend(lines2 + lines2v, labels2 + labels2v,
+                   loc='best', fontsize=self.style.legend_fontsize)
+
+        fig.suptitle(r'Friction Compensation vs True Friction Torque \& Joint Velocity (FBL+NDOB)',
+                     fontsize=self.style.title_fontsize, fontweight='bold')
+        return fig
+
+    def _plot_friction_comparison_all(self) -> plt.Figure:
+        """Figure 18: Friction Compensation vs True Friction — PID, FBL, FBL+NDOB (2×3 grid)."""
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10),
+                                 constrained_layout=self._get_layout_mode())
+
+        controllers = [
+            ('PID',      self._t_pid,  self._results_pid['log_arrays'],  ControllerColors.PID),
+            ('FBL',      self._t_fbl,  self._results_fbl['log_arrays'],  ControllerColors.FBL),
+            ('FBL+NDOB', self._t_ndob, self._results_ndob['log_arrays'], ControllerColors.FBL_NDOB),
+        ]
+
+        lw        = self.style.linewidth_primary
+        alpha     = self.style.alpha_primary
+        vel_color = '#e67e22'
+
+        for col, (label, t, log, ctrl_color) in enumerate(controllers):
+            fc_az  = np.array(log.get('friction_comp_az',  np.zeros(len(t))))
+            fc_el  = np.array(log.get('friction_comp_el',  np.zeros(len(t))))
+            tau_az = np.array(log.get('tau_friction_az',   np.zeros(len(t))))
+            tau_el = np.array(log.get('tau_friction_el',   np.zeros(len(t))))
+            qd_az  = np.array(log.get('qd_az',             np.zeros(len(t))))
+            qd_el  = np.array(log.get('qd_el',             np.zeros(len(t))))
+
+            for row, (ax, tau, fc, qd, axis_label, qd_label) in enumerate([
+                (axes[0, col], tau_az, fc_az, qd_az, 'Azimuth',   r'$\dot{q}_{az}$'),
+                (axes[1, col], tau_el, fc_el, qd_el, 'Elevation', r'$\dot{q}_{el}$'),
+            ]):
+                ax.plot(t, tau, color=ControllerColors.GROUND_TRUTH, linewidth=lw,
+                        linestyle='--', label=r'$\tau_{\mathrm{friction}}$ (Applied)', alpha=alpha)
+                ax.plot(t, fc,  color=ctrl_color, linewidth=lw,
+                        label=rf'$\hat{{\tau}}_{{\mathrm{{comp}}}}$ ({label})', alpha=alpha)
+                ax.set_title(f'{label} — {axis_label}')
+                ax.set_ylabel(r'Torque [N$\cdot$m]')
+                if row == 1:
+                    ax.set_xlabel(r'Time [s]')
+                ax.grid(True, alpha=0.3)
+
+                axv = ax.twinx()
+                axv.plot(t, np.rad2deg(qd), color=vel_color, linewidth=lw * 0.85,
+                         linestyle=':', alpha=0.75, label=qd_label)
+                axv.set_ylabel(r'Velocity [deg/s]', color=vel_color)
+                axv.tick_params(axis='y', labelcolor=vel_color)
+
+                lines_l, labels_l = ax.get_legend_handles_labels()
+                lines_v, labels_v = axv.get_legend_handles_labels()
+                ax.legend(lines_l + lines_v, labels_l + labels_v,
+                          loc='best', fontsize=self.style.legend_fontsize - 2)
+
+        fig.suptitle(
+            r'Friction Compensation vs True Friction Torque \& Velocity — PID, FBL, FBL+NDOB',
+            fontsize=self.style.title_fontsize, fontweight='bold')
+        return fig
+
     def _save_all_figures(self) -> None:
         """Save all generated figures to disk in journal-quality PDF format."""
         mode_str = "interactive" if self.interactive else "static"
-        print(f"\n[OK] Generated 16 research-quality {mode_str} figures (300 DPI, LaTeX labels)")
+        print(f"\n[OK] Generated 18 research-quality {mode_str} figures (300 DPI, LaTeX labels)")
         print("Saving figures to disk in journal-quality PDF format...")
         
         figure_names = {
@@ -1678,8 +1805,10 @@ class ResearchComparisonPlotter:
             'fig14_stroke_metrics': 'fig14_stroke_consumption_ratio.pdf',
             'fig15_stroke_summary': 'fig15_stroke_margin_summary.pdf',
             'fig16_benchmark_table': 'fig16_benchmark_table_results.pdf',
+            'fig17_friction_comp': 'fig17_friction_compensation.pdf',
+            'fig18_friction_all':  'fig18_friction_comparison_all.pdf',
         }
-        
+
         for key, filename in figure_names.items():
             if key in self.figures:
                 filepath = self.style.output_dir / filename
@@ -1706,7 +1835,7 @@ class ResearchComparisonPlotter:
                 except Exception as e:
                     print(f"  [ERROR] Failed to save {filename}: {e}")
         
-        print(f"  [OK] Saved 16 PDF figures to {self.style.output_dir.absolute()}/")
+        print(f"  [OK] Saved 18 PDF figures to {self.style.output_dir.absolute()}/")
         print("  [OK] Format: PDF (vector), 300 DPI, bbox='tight' (journal-ready)")
         print("FIGURE GENERATION COMPLETE")
         print("=" * 70)
