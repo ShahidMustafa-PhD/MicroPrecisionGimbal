@@ -76,15 +76,15 @@ if(1):
     tau_c     = 0.15,    # Coulomb friction magnitude     [N.m]   (plateau at high speed)
     tau_s     = 0.25,    # Static friction / stiction     [N.m]   (breakaway; must >= tau_c)
     v_s       = 0.05,    # Stribeck velocity threshold    [rad/s] (transition knee)
-    b         = 0.1,    # Viscous friction coefficient   [N.m.s/rad]
+    b         = 0.02,    # Viscous friction coefficient   [N.m.s/rad]
     alpha     = 2.0,     # Stribeck exponent: 1=linear, 2=Gaussian. SET TO 2.0 to match LuGre.
-    v_epsilon = 0.05,    # tanh smoothing half-width      [rad/s] (smaller = sharper stick-slip)
+    v_epsilon = 0.005,    # tanh smoothing half-width      [rad/s] (smaller = sharper stick-slip)
 )
 # for elevation gimbal
 if(0):
  TUSTIN = dict(
-    tau_c     = 0.10,    # Coulomb friction magnitude     [N.m]   (plateau at high speed)
-    tau_s     = 0.18,    # Static friction / stiction     [N.m]   (breakaway; must >= tau_c)
+    tau_c     = 0.08,    # Coulomb friction magnitude     [N.m]   (plateau at high speed)
+    tau_s     = 0.11,    # Static friction / stiction     [N.m]   (breakaway; must >= tau_c)
     v_s       = 0.05,    # Stribeck velocity threshold    [rad/s] (transition knee)
     b         = 0.015,    # Viscous friction coefficient   [N.m.s/rad]
     alpha     = 2.0,     # Stribeck exponent: 1=linear, 2=Gaussian. SET TO 2.0 to match LuGre.
@@ -104,7 +104,7 @@ if(1):
  LUGRE = dict(
     sigma_0 = 1.0e4,   # Bristle stiffness              [N.m/rad]     — higher = faster transient
     sigma_1 = 1.0,     # Bristle micro-damping          [N.m.s/rad]   — higher = more overdamped
-    sigma_2 = 0.1,    # Viscous coefficient            [N.m.s/rad]   — SET EQUAL TO Tustin b
+    sigma_2 = 0.02,    # Viscous coefficient            [N.m.s/rad]   — SET EQUAL TO Tustin b
     tau_c   = 0.15,    # Coulomb friction               [N.m]         — SET EQUAL TO Tustin tau_c
     tau_s   = 0.25,    # Static friction                [N.m]         — SET EQUAL TO Tustin tau_s
     v_s     = 0.05,    # Stribeck velocity              [rad/s]       — SET EQUAL TO Tustin v_s
