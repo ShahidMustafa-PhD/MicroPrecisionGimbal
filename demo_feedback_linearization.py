@@ -846,22 +846,22 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
         'v_s_el': 0.05,      # Stribeck velocity El [rad/s]
         'b_az': 0.02,        # Viscous damping Az [N·m·s/rad]
         'b_el': 0.015,       # Viscous damping El [N·m·s/rad]
-        'v_epsilon': 0.05,   # Smoothing threshold [rad/s] (prevents chattering)
+        'v_epsilon': 0.0001,   # Smoothing threshold [rad/s] (prevents chattering)
         # ── Controller nominal friction (intentionally underestimated) ────────
         # Simulates imperfect friction identification. The NDOB compensates the residual.
         # Runner applies ±nominal_friction_noise_pct perturbation around these baselines.
         # These are intentionally ~80% of the true plant values so the controller
         # systematically under-compensates friction; the NDOB estimates the residual.
         # Line 791 of simulation_runner.py applies the random nudge on top.
-        'nominal_tau_s_az': 0.20,   # ~80 % of plant tau_s_az=0.25  [N·m]
-        'nominal_tau_s_el': 0.15,   # ~83 % of plant tau_s_el=0.18  [N·m]
-        'nominal_tau_c_az': 0.12,   # ~80 % of plant tau_c_az=0.15  [N·m]
-        'nominal_tau_c_el': 0.08,   # ~80 % of plant tau_c_el=0.10  [N·m]
+        'nominal_tau_s_az': 0.25,   # ~80 % of plant tau_s_az=0.25  [N·m]
+        'nominal_tau_s_el': 0.18,   # ~83 % of plant tau_s_el=0.18  [N·m]
+        'nominal_tau_c_az': 0.15,   # ~80 % of plant tau_c_az=0.15  [N·m]
+        'nominal_tau_c_el': 0.10,   # ~80 % of plant tau_c_el=0.10  [N·m]
   
         'nominal_v_s_az': 0.05,   # Controller Stribeck velocity Az [rad/s]
         'nominal_v_s_el': 0.05,   # Controller Stribeck velocity El [rad/s]
-        'nominal_v_epsilon': 0.05,  # Smoothing threshold for nominal model [rad/s]
-        'nominal_friction_noise_pct': 0.020,  # ±20 % uniform perturbation (measurement error)
+        'nominal_v_epsilon': 0.0001,  # Smoothing threshold for nominal model [rad/s]
+        'nominal_friction_noise_pct': 0.20,  # ±20 % uniform perturbation (measurement error)
     }
 
     # LuGre parameters matched to Tustin for a controlled comparison.
@@ -955,8 +955,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
             'kp': [3.514, 1.320],    # Per-axis: [Pan, Tilt]
             'ki': [15.464, 4.148],   # Designed for 5 Hz bandwidth
             'kd': [0.293, 0.059418],  # Corrected Kd values (40% higher than before)
-            'tau_max': [1.0, 1.0],
-            'tau_min': [-1.0, -1.0],
+            'tau_max': [1.0, 0.7],
+            'tau_min': [-1.0, -0.7],
             'anti_windup_gain': 1.0,
             'tau_rate_limit': 50.0,
             'enable_derivative': True  # Now works correctly with fixed implementation
@@ -1015,7 +1015,7 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
             'kp': [400.0, 800.0],    # Position gain [1/s²]
             'kd': [40.0, 60.0],      # Velocity gain [1/s] - critically damped
             'ki': [50.0, 50.0],      # Integral for residual disturbances
-            'enable_integral': True,  # ENABLE for steady-state performance
+            'enable_integral': False,  # ENABLE for steady-state performance
             'tau_max': [1.0, 1.0],
             'tau_min': [-1.0, -1.0],
             # NOTE: conditional_friction defaults to True, which is REQUIRED
@@ -1095,8 +1095,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
         # PRODUCTION RECOMMENDATION: Use NDOB at moderate bandwidth (50-100 rad/s)
         # combined with friction feedforward (conditional_friction=True) for
         # optimal performance.
-        'lambda_az': 60.0,   # Moderate bandwidth (avoids instability at >200)
-        'lambda_el': 60.0,   # Same for both axes
+        'lambda_az':50.0,   # Moderate bandwidth (avoids instability at >200)
+        'lambda_el': 35.0,   # Same for both axes
         'd_max': 0.5         # Allow reasonable estimates
     }
     # KEEP friction feedforward ENABLED with NDOB!
@@ -1219,7 +1219,7 @@ if __name__ == '__main__':
     #              Reveals quadrant-glitch torque spikes at velocity reversals.
     #              Shows how much NDOB degrades when the friction model has memory.
     #
-    FRICTION_MODEL = 'lugre'   # <-- CHANGE THIS: 'tustin' or 'lugre' or 'viscous'
+    FRICTION_MODEL = 'tustin'   # <-- CHANGE THIS: 'tustin' or 'lugre' or 'viscous'
 
     # Available signal types: 'constant', 'square', 'sine', 'cosine', 'hybridsig'
 
