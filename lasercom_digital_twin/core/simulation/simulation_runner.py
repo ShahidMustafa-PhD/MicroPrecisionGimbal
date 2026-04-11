@@ -478,8 +478,14 @@ class DigitalTwinRunner:
         # IDEAL CONDITIONS: plant and controller share the same GimbalDynamics instance.
         # To test robustness to model mismatch, replace this with a separate GimbalDynamics
         # with perturbed parameters (e.g. pan_mass*1.1, cm_r+0.002).
-        self.dynamics_sim = self.dynamics  # Same model — no plant/controller mismatch
-        
+        #self.dynamics_sim = self.dynamics  # Same model — no plant/controller mismatch
+        self.dynamics_sim = GimbalDynamics(
+            pan_mass=self.pan_mass*1.2,
+            tilt_mass=self.tilt_mass*1.2,
+            cm_r=self.cm_r+0.001,
+            cm_h=self.cm_h+0.001,
+            gravity=self.gravity
+        )
         # Compute inertias from mass matrix at zero position (q=0)
         # For a 2-DOF gimbal, inertia_az = M[0,0] and inertia_el = M[1,1] at q=0
         M_at_zero = self.dynamics.get_mass_matrix(np.zeros(2))  # Mass matrix at [0, 0]
@@ -799,7 +805,7 @@ class DigitalTwinRunner:
             _rng = np.random.default_rng(self.config.seed)
 
             def _nudge(val: float) -> float:
-                return val * (1.0 + _rng.uniform(-_noise_pct, _noise_pct))
+                return val * (1.0+_rng.uniform(-_noise_pct, _noise_pct))
 
             fl_config['nominal_tau_c_az']  = _nudge(_tc.get('nominal_tau_c_az',  0.12))
             fl_config['nominal_tau_c_el']  = _nudge(_tc.get('nominal_tau_c_el',  0.08))
