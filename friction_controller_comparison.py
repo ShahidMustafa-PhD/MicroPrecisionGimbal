@@ -45,6 +45,8 @@ Date   : April 10, 2026
 from __future__ import annotations
 
 import copy
+import csv
+import datetime
 import sys
 import time
 from pathlib import Path
@@ -134,6 +136,238 @@ FRICTION_ORDER: Tuple[str, str, str] = ('viscous', 'tustin', 'lugre')
 
 
 # =============================================================================
+# NDOB sweep persistence
+# =============================================================================
+# Every run of this script logs the NDOB tuning (lambda_az, lambda_el, d_max)
+# together with the eleven benchmark metrics shown in Fig 7 of
+# FrictionComparisonPlotter, for each of the three friction models. The CSV
+# accumulates across runs so that the bar-chart history below grows richer
+# with every experiment. Stored outside figures_*/ so it survives `git clean`
+# and isn't swept up by the figures gitignore.
+NDOB_SWEEP_DIR        = Path('ndob_sweep_results')
+NDOB_SWEEP_LOG_PATH   = NDOB_SWEEP_DIR / 'ndob_sweep_log.csv'
+NDOB_SWEEP_PLOTS_DIR  = NDOB_SWEEP_DIR / 'plots'
+
+# (csv_key, display_name, unit, value_format) — one entry per Fig 7 row.
+FIG7_METRICS: Tuple[Tuple[str, str, str, str], ...] = (
+    ('post_fsm_residual_tip_urad',  'Post-FSM Residual Tip',  r'$\mu$rad', '.2f'),
+    ('post_fsm_residual_tilt_urad', 'Post-FSM Residual Tilt', r'$\mu$rad', '.2f'),
+    ('los_rms_urad',                'LOS Error RMS',          r'$\mu$rad', '.2f'),
+    ('torque_rms_az_nm',            'Torque RMS Az',          r'N$\cdot$m', '.4f'),
+    ('torque_rms_el_nm',            'Torque RMS El',          r'N$\cdot$m', '.4f'),
+    ('scr_rms_tip_pct',             'SCR$_{rms}$ Tip',        r'%',        '.1f'),
+    ('scr_rms_tilt_pct',            'SCR$_{rms}$ Tilt',       r'%',        '.1f'),
+    ('s_bias_tip_mrad',             'S$_{bias}$ Tip',         r'mrad',     '.3f'),
+    ('s_bias_tilt_mrad',            'S$_{bias}$ Tilt',        r'mrad',     '.3f'),
+    ('dsm_tip_mrad',                'DSM Tip',                r'mrad',     '.3f'),
+    ('dsm_tilt_mrad',               'DSM Tilt',               r'mrad',     '.3f'),
+)
+
+
+def _ndob_csv_fieldnames() -> List[str]:
+    """Column order for the NDOB sweep CSV — header + per-model metric blocks."""
+    fields = ['timestamp', 'enable', 'lambda_az', 'lambda_el', 'd_max']
+    for fm in FRICTION_ORDER:
+        for key, _name, _unit, _fmt in FIG7_METRICS:
+            fields.append(f'{fm}_{key}')
+    return fields
+
+
+def append_ndob_experiment_log(
+    csv_path: Path,
+    ndob_cfg: Dict,
+    metrics_per_model: Dict[str, Dict[str, float]],
+) -> int:
+    """Append one experiment row to the NDOB sweep CSV.
+
+    Parameters
+    ----------
+    csv_path
+        Destination CSV. Created (with header) on first call.
+    ndob_cfg
+        The ``SimulationConfig.ndob_config`` dict actually used for the run.
+    metrics_per_model
+        ``{friction_model: {metric_key: value}}`` as produced by
+        ``FrictionComparisonPlotter._collect_fig7_metrics``.
+
+    Returns
+    -------
+    int
+        Zero-based index of the newly appended row (i.e. the experiment number
+        minus one).
+    """
+    csv_path = Path(csv_path)
+    csv_path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = _ndob_csv_fieldnames()
+
+    row: Dict[str, object] = {
+        'timestamp': datetime.datetime.now().isoformat(timespec='seconds'),
+        'enable':    int(bool(ndob_cfg.get('enable', False))),
+        'lambda_az': float(ndob_cfg.get('lambda_az', float('nan'))),
+        'lambda_el': float(ndob_cfg.get('lambda_el', float('nan'))),
+        'd_max':     float(ndob_cfg.get('d_max',     float('nan'))),
+    }
+    for fm in FRICTION_ORDER:
+        per_model = metrics_per_model.get(fm, {})
+        for key, _name, _unit, _fmt in FIG7_METRICS:
+            row[f'{fm}_{key}'] = float(per_model.get(key, float('nan')))
+
+    file_exists = csv_path.exists() and csv_path.stat().st_size > 0
+    with csv_path.open('a', newline='', encoding='utf-8') as fh:
+        writer = csv.DictWriter(fh, fieldnames=fieldnames)
+        if not file_exists:
+            writer.writeheader()
+        writer.writerow(row)
+
+    with csv_path.open('r', encoding='utf-8') as fh:
+        n_data_rows = max(0, sum(1 for _ in fh) - 1)
+    return n_data_rows - 1
+
+
+def _read_ndob_sweep_log(csv_path: Path) -> List[Dict[str, str]]:
+    """Read every row from the NDOB sweep CSV. Returns [] if the file is missing."""
+    csv_path = Path(csv_path)
+    if not csv_path.exists():
+        return []
+    with csv_path.open('r', encoding='utf-8') as fh:
+        return list(csv.DictReader(fh))
+
+
+def build_ndob_sweep_history_figures(
+    csv_path: Path,
+    output_dir: Path | None = None,
+    save: bool = True,
+) -> Dict[str, plt.Figure]:
+    """Build one annotated bar chart per Fig 7 metric from the sweep CSV.
+
+    Each figure shows three bars per experiment (viscous / Tustin / LuGre)
+    with the corresponding NDOB tuning ($\\lambda_{az}$, $\\lambda_{el}$,
+    $d_{max}$) annotated below the group. The figures grow richer as more
+    experiments are appended to the CSV.
+
+    Parameters
+    ----------
+    csv_path
+        Path to the NDOB sweep CSV produced by ``append_ndob_experiment_log``.
+    output_dir
+        Where to save PDFs. Defaults to ``NDOB_SWEEP_PLOTS_DIR``.
+    save
+        If True, write a PDF for every metric figure.
+
+    Returns
+    -------
+    dict
+        ``{metric_key: matplotlib.Figure}``. Empty if the CSV is missing or empty.
+    """
+    rows = _read_ndob_sweep_log(csv_path)
+    if not rows:
+        print(f"[NDOB sweep] No data at {csv_path} — history plot skipped.")
+        return {}
+
+    # Sort experiments left-to-right by ascending (lambda_az, lambda_el) so
+    # lower NDOB gains sit on the left and the bars march upward in the gain.
+    # d_max breaks ties between otherwise-identical tunings.
+    def _sort_key(r: Dict[str, str]) -> Tuple[float, float, float]:
+        try:
+            return (float(r['lambda_az']),
+                    float(r['lambda_el']),
+                    float(r['d_max']))
+        except (KeyError, ValueError):
+            return (float('inf'), float('inf'), float('inf'))
+
+    rows = sorted(rows, key=_sort_key)
+
+    if output_dir is None:
+        output_dir = NDOB_SWEEP_PLOTS_DIR
+    output_dir = Path(output_dir)
+    if save:
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    n_exp = len(rows)
+    x = np.arange(n_exp)
+    bar_w = 0.26
+    fig_width = float(min(22.0, max(8.0, 1.7 * n_exp + 3.0)))
+
+    figs: Dict[str, plt.Figure] = {}
+
+    for key, name, unit, fmt in FIG7_METRICS:
+        fig, ax = plt.subplots(figsize=(fig_width, 6.2))
+
+        for i, fm in enumerate(FRICTION_ORDER):
+            try:
+                vals = [float(r[f'{fm}_{key}']) for r in rows]
+            except (KeyError, ValueError):
+                vals = [float('nan')] * n_exp
+            offset = (i - 1) * bar_w
+            bars = ax.bar(
+                x + offset, vals, bar_w,
+                color=FRICTION_COLOR_MAP[fm],
+                label=FRICTION_LABELS[fm],
+                edgecolor='black', linewidth=0.6,
+                alpha=0.92,
+            )
+            for b, v in zip(bars, vals):
+                if not np.isfinite(v):
+                    continue
+                ax.text(
+                    b.get_x() + b.get_width() / 2.0,
+                    b.get_height(),
+                    format(v, fmt),
+                    ha='center', va='bottom',
+                    fontsize=7.5, rotation=0,
+                )
+
+        tick_labels = []
+        for i, r in enumerate(rows):
+            try:
+                la = float(r['lambda_az'])
+                le = float(r['lambda_el'])
+                dm = float(r['d_max'])
+                lab = (
+                    f'#{i + 1}\n'
+                    rf'$\lambda_{{az}}$={la:.1f}'  '\n'
+                    rf'$\lambda_{{el}}$={le:.1f}'  '\n'
+                    rf'$d_{{max}}$={dm:.2f}'
+                )
+            except (KeyError, ValueError):
+                lab = f'#{i + 1}'
+            tick_labels.append(lab)
+
+        ax.set_xticks(x)
+        ax.set_xticklabels(tick_labels, fontsize=9)
+        ax.set_ylabel(f'{name} [{unit}]', fontsize=12, fontweight='bold')
+        ax.set_xlabel('NDOB experiment (annotated with tuning)',
+                      fontsize=12, fontweight='bold')
+        ax.set_title(
+            f'NDOB Sweep History — {name}   (n = {n_exp})',
+            fontsize=14, fontweight='bold', pad=10,
+        )
+        ax.grid(True, axis='y', linestyle=':', alpha=0.4)
+        ax.set_axisbelow(True)
+        ax.legend(loc='best', framealpha=0.92, fontsize=10)
+
+        ymin, ymax = ax.get_ylim()
+        ax.set_ylim(ymin, ymax + 0.10 * (ymax - ymin if ymax > ymin else 1.0))
+
+        fig.tight_layout()
+
+        if save:
+            out_path = output_dir / f'ndob_sweep_{key}.pdf'
+            try:
+                fig.savefig(
+                    str(out_path), format='pdf', dpi=300,
+                    bbox_inches='tight', facecolor='white',
+                )
+                print(f"  [OK] {out_path.name}")
+            except Exception as exc:
+                print(f"  [ERROR] Failed to save {out_path.name}: {exc}")
+
+        figs[f'ndob_sweep_{key}'] = fig
+
+    return figs
+
+
+# =============================================================================
 # Simulation driver
 # =============================================================================
 def _build_config(
@@ -169,7 +403,7 @@ def _build_config(
 
     config = SimulationConfig(
         dt_sim=0.0001,
-        dt_coarse=0.01,
+        dt_coarse=0.002,
         dt_fine=0.00001,
         dt_qpd=0.00001,
         log_period=0.001,
@@ -204,16 +438,16 @@ def _build_config(
             'kd': [40.0, 60.0],
             'ki': [50.0, 50.0],
             'enable_integral': False,
-            'tau_max': [1.0, 1.0],
-            'tau_min': [-1.0, -1.0],
+            'tau_max': [1.0, 0.7],
+            'tau_min': [-1.0, -0.7],
             'conditional_friction': True,
             'enable_disturbance_compensation': False,
         },
         # --- NDOB (enabled, identical tuning for all runs) ---
         ndob_config={
             'enable': True,
-            'lambda_az': 50.0,
-            'lambda_el': 30.0,
+            'lambda_az': 110.0,
+            'lambda_el': 100.0,
             'd_max': 0.5,
         },
         dynamics_config={
@@ -311,8 +545,8 @@ def run_friction_comparison(
     # LuGre so that any observed difference is attributable solely to LuGre's
     # bristle dynamics, not to a change in Coulomb level.
     viscous_cfg = {
-        'friction_az': 0.02,
-        'friction_el': 0.015,
+        'friction_az': 0.09,
+        'friction_el': 0.075,
     }
 
     tustin_cfg = {
@@ -320,11 +554,11 @@ def run_friction_comparison(
         'tau_c_az': 0.15, 'tau_c_el': 0.10,
         'v_s_az':  0.05,  'v_s_el':  0.05,
         'b_az':    0.02,  'b_el':    0.015,
-        'v_epsilon': 0.05,
+        'v_epsilon': 0.005,
         'nominal_tau_s_az': 0.25, 'nominal_tau_s_el': 0.18,
         'nominal_tau_c_az': 0.15, 'nominal_tau_c_el': 0.10,
         'nominal_v_s_az':  0.05,  'nominal_v_s_el':  0.05,
-        'nominal_v_epsilon': 0.05,
+        'nominal_v_epsilon': 0.005,
         'nominal_friction_noise_pct': 0.20,
     }
 
@@ -351,6 +585,7 @@ def run_friction_comparison(
     print()
 
     results: Dict[str, Dict] = {}
+    ndob_cfg_used: Dict | None = None
 
     for idx, friction_model in enumerate(FRICTION_ORDER, start=1):
         print("-" * 80)
@@ -372,6 +607,9 @@ def run_friction_comparison(
             tustin_cfg=copy.deepcopy(tustin_cfg),
             lugre_cfg=copy.deepcopy(lugre_cfg),
         )
+
+        if ndob_cfg_used is None:
+            ndob_cfg_used = dict(cfg.ndob_config)
 
         runner = DigitalTwinRunner(cfg)
         res = runner.run_simulation(duration=duration)
@@ -441,6 +679,9 @@ def run_friction_comparison(
         tustin_p=tustin_p,
         lugre_p=lugre_p,
         axis_label='Azimuth Gimbal',
+        ndob_cfg=ndob_cfg_used,
+        ndob_log_path=NDOB_SWEEP_LOG_PATH,
+        ndob_history_dir=NDOB_SWEEP_PLOTS_DIR,
     )
 
     return results
@@ -513,6 +754,9 @@ class FrictionComparisonPlotter:
         tustin_p: Dict | None = None,
         lugre_p: Dict | None = None,
         axis_label: str = 'Azimuth',
+        ndob_cfg: Dict | None = None,
+        ndob_log_path: Path | None = None,
+        ndob_history_dir: Path | None = None,
     ) -> Dict[str, plt.Figure]:
         """Generate every figure, save to disk, and (optionally) display.
 
@@ -554,6 +798,32 @@ class FrictionComparisonPlotter:
 
         if self.save_figures:
             self._save_all_figures()
+
+        # ── NDOB sweep persistence + history bar charts ─────────────────
+        # When called with an ndob_cfg + log path, append this run's
+        # benchmark metrics to the CSV and (re)build one bar chart per
+        # Fig 7 row from the full accumulated history. The history figures
+        # are saved to their own directory and remain open so the
+        # subsequent ``plt.show()`` displays them alongside Fig 1–10.
+        self._ndob_history_figs: Dict[str, plt.Figure] = {}
+        if ndob_cfg is not None and ndob_log_path is not None:
+            try:
+                metrics_for_log = self._collect_fig7_metrics()
+                exp_idx = append_ndob_experiment_log(
+                    ndob_log_path, ndob_cfg, metrics_for_log,
+                )
+                print(
+                    f"\n[NDOB sweep] Logged experiment #{exp_idx + 1} to "
+                    f"{Path(ndob_log_path).resolve()}"
+                )
+                print("[NDOB sweep] Building history bar charts ...")
+                self._ndob_history_figs = build_ndob_sweep_history_figures(
+                    ndob_log_path,
+                    output_dir=ndob_history_dir,
+                    save=self.save_figures,
+                )
+            except Exception as exc:
+                print(f"[NDOB sweep] Skipped — {type(exc).__name__}: {exc}")
 
         if self.show_figures:
             print("\nDisplaying comparative figures (close the windows to exit) ...")
@@ -1006,23 +1276,18 @@ class FrictionComparisonPlotter:
     # ────────────────────────────────────────────────────────────────────
     # FIGURE 7 — Benchmark table
     # ────────────────────────────────────────────────────────────────────
-    def _plot_benchmark_table(self) -> plt.Figure:
+    def _collect_fig7_metrics(self) -> Dict[str, Dict[str, float]]:
+        """Compute every metric tabulated in Fig 7, per friction model.
+
+        Single source of truth for both ``_plot_benchmark_table`` and the
+        NDOB sweep CSV logger. Raises if the stroke metrics cannot be
+        computed (caller decides whether to fall back).
+        """
         theta_max = self._get_stroke_limit()
-        try:
-            metrics = self._compute_stroke_metrics(theta_max)
-        except Exception as exc:
-            fig, ax = plt.subplots(figsize=self.FIG_SIZE_1x1)
-            ax.set_axis_off()
-            ax.text(0.5, 0.5, f'Benchmark table unavailable:\n{exc}',
-                    ha='center', va='center', transform=ax.transAxes)
-            return fig
+        stroke = self._compute_stroke_metrics(theta_max)
 
-        # Post-FSM residual RMS (last 50% of the record)
         to_urad = 1e6
-        residual_rms: Dict[str, Tuple[float, float]] = {}
-        los_rms: Dict[str, float] = {}
-        torque_rms: Dict[str, Tuple[float, float]] = {}
-
+        out: Dict[str, Dict[str, float]] = {}
         for fm in FRICTION_ORDER:
             log = self._results[fm]['log_arrays']
             t = self._times[fm]
@@ -1033,20 +1298,37 @@ class FrictionComparisonPlotter:
                 steady = t[n - 1] * 0.5
                 mask = t[:n] >= steady
                 if mask.sum() > 0:
-                    residual_rms[fm] = (
-                        float(np.sqrt(np.mean(res_x[:n][mask] ** 2))),
-                        float(np.sqrt(np.mean(res_y[:n][mask] ** 2))),
-                    )
+                    tip_rms  = float(np.sqrt(np.mean(res_x[:n][mask] ** 2)))
+                    tilt_rms = float(np.sqrt(np.mean(res_y[:n][mask] ** 2)))
                 else:
-                    residual_rms[fm] = (0.0, 0.0)
+                    tip_rms, tilt_rms = 0.0, 0.0
             else:
-                residual_rms[fm] = (0.0, 0.0)
+                tip_rms, tilt_rms = 0.0, 0.0
 
-            los_rms[fm] = float(self._results[fm].get('los_error_rms', 0.0) * 1e6)
-            torque_rms[fm] = (
-                float(self._results[fm].get('torque_rms_az', 0.0)),
-                float(self._results[fm].get('torque_rms_el', 0.0)),
-            )
+            out[fm] = {
+                'post_fsm_residual_tip_urad':  tip_rms,
+                'post_fsm_residual_tilt_urad': tilt_rms,
+                'los_rms_urad':                float(self._results[fm].get('los_error_rms', 0.0) * 1e6),
+                'torque_rms_az_nm':            float(self._results[fm].get('torque_rms_az', 0.0)),
+                'torque_rms_el_nm':            float(self._results[fm].get('torque_rms_el', 0.0)),
+                'scr_rms_tip_pct':             float(stroke[fm].scr_tip),
+                'scr_rms_tilt_pct':            float(stroke[fm].scr_tilt),
+                's_bias_tip_mrad':             float(stroke[fm].s_bias_tip_mrad),
+                's_bias_tilt_mrad':            float(stroke[fm].s_bias_tilt_mrad),
+                'dsm_tip_mrad':                float(stroke[fm].dsm_tip_mrad),
+                'dsm_tilt_mrad':               float(stroke[fm].dsm_tilt_mrad),
+            }
+        return out
+
+    def _plot_benchmark_table(self) -> plt.Figure:
+        try:
+            metrics = self._collect_fig7_metrics()
+        except Exception as exc:
+            fig, ax = plt.subplots(figsize=self.FIG_SIZE_1x1)
+            ax.set_axis_off()
+            ax.text(0.5, 0.5, f'Benchmark table unavailable:\n{exc}',
+                    ha='center', va='center', transform=ax.transAxes)
+            return fig
 
         fig, ax = plt.subplots(figsize=self.FIG_SIZE_1x1)
         ax.set_axis_off()
@@ -1056,55 +1338,12 @@ class FrictionComparisonPlotter:
                       FRICTION_LABELS['tustin'],
                       FRICTION_LABELS['lugre']]
 
-        def _row(label: str, get_val):
-            return [label] + [f'{get_val(fm):.3f}' for fm in FRICTION_ORDER]
-
-        table_rows = [
-            ['Post-FSM Residual Tip  [µrad]',
-             f'{residual_rms["viscous"][0]:.2f}',
-             f'{residual_rms["tustin"][0]:.2f}',
-             f'{residual_rms["lugre"][0]:.2f}'],
-            ['Post-FSM Residual Tilt [µrad]',
-             f'{residual_rms["viscous"][1]:.2f}',
-             f'{residual_rms["tustin"][1]:.2f}',
-             f'{residual_rms["lugre"][1]:.2f}'],
-            ['LOS Error RMS [µrad]',
-             f'{los_rms["viscous"]:.2f}',
-             f'{los_rms["tustin"]:.2f}',
-             f'{los_rms["lugre"]:.2f}'],
-            ['Torque RMS Az [N·m]',
-             f'{torque_rms["viscous"][0]:.4f}',
-             f'{torque_rms["tustin"][0]:.4f}',
-             f'{torque_rms["lugre"][0]:.4f}'],
-            ['Torque RMS El [N·m]',
-             f'{torque_rms["viscous"][1]:.4f}',
-             f'{torque_rms["tustin"][1]:.4f}',
-             f'{torque_rms["lugre"][1]:.4f}'],
-            ['SCR_rms Tip  [%]',
-             f'{metrics["viscous"].scr_tip:.1f}',
-             f'{metrics["tustin"].scr_tip:.1f}',
-             f'{metrics["lugre"].scr_tip:.1f}'],
-            ['SCR_rms Tilt [%]',
-             f'{metrics["viscous"].scr_tilt:.1f}',
-             f'{metrics["tustin"].scr_tilt:.1f}',
-             f'{metrics["lugre"].scr_tilt:.1f}'],
-            ['S_bias Tip  [mrad]',
-             f'{metrics["viscous"].s_bias_tip_mrad:.3f}',
-             f'{metrics["tustin"].s_bias_tip_mrad:.3f}',
-             f'{metrics["lugre"].s_bias_tip_mrad:.3f}'],
-            ['S_bias Tilt [mrad]',
-             f'{metrics["viscous"].s_bias_tilt_mrad:.3f}',
-             f'{metrics["tustin"].s_bias_tilt_mrad:.3f}',
-             f'{metrics["lugre"].s_bias_tilt_mrad:.3f}'],
-            ['DSM Tip  [mrad]',
-             f'{metrics["viscous"].dsm_tip_mrad:.3f}',
-             f'{metrics["tustin"].dsm_tip_mrad:.3f}',
-             f'{metrics["lugre"].dsm_tip_mrad:.3f}'],
-            ['DSM Tilt [mrad]',
-             f'{metrics["viscous"].dsm_tilt_mrad:.3f}',
-             f'{metrics["tustin"].dsm_tilt_mrad:.3f}',
-             f'{metrics["lugre"].dsm_tilt_mrad:.3f}'],
-        ]
+        table_rows = []
+        for key, name, unit, fmt in FIG7_METRICS:
+            row = [f'{name} [{unit}]']
+            for fm in FRICTION_ORDER:
+                row.append(format(metrics[fm][key], fmt))
+            table_rows.append(row)
 
         col_widths = [0.30, 0.22, 0.22, 0.22]
         tbl = ax.table(
