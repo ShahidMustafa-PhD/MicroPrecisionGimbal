@@ -367,6 +367,151 @@ def build_ndob_sweep_history_figures(
     return figs
 
 
+def build_scr_tables_pdf(
+    csv_path: Path,
+    output_path: Path | None = None,
+) -> None:
+    """Build a professional multi-page PDF with SCR tables grouped by (λ_az, λ_el).
+
+    Each unique (lambda_az, lambda_el) pair gets its own full-page table with
+    columns for d_max, SCR_rms Tip [%] and SCR_rms Tilt [%] per friction
+    model. Tables are split across pages for clarity and readability.
+
+    Parameters
+    ----------
+    csv_path
+        Path to the NDOB sweep CSV.
+    output_path
+        Where to save the PDF. Defaults to ``NDOB_SWEEP_DIR / 'scr_tables.pdf'``.
+    """
+    rows = _read_ndob_sweep_log(csv_path)
+    if not rows:
+        print("[SCR tables] No data — skipped.")
+        return
+
+    if output_path is None:
+        output_path = NDOB_SWEEP_DIR / 'scr_tables.pdf'
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # ── Group rows by (lambda_az, lambda_el), sorted ascending ──────────
+    from collections import OrderedDict
+    groups: Dict[Tuple[float, float], List[Dict[str, str]]] = OrderedDict()
+    for r in sorted(rows, key=lambda r: (
+        float(r.get('lambda_az', 'inf')),
+        float(r.get('lambda_el', 'inf')),
+        float(r.get('d_max', 'inf')),
+    )):
+        pair = (float(r['lambda_az']), float(r['lambda_el']))
+        groups.setdefault(pair, []).append(r)
+
+    n_groups = len(groups)
+
+    # Use PdfPages for multi-page output
+    from matplotlib.backends.backend_pdf import PdfPages
+
+    with PdfPages(str(output_path)) as pdf:
+        page_num = 0
+        for page_idx, ((laz, lel), grp_rows) in enumerate(groups.items()):
+            fig = plt.figure(figsize=(11.0, 8.5))
+            ax = fig.add_subplot(111)
+            ax.axis('off')
+
+            # ── Title block ────────────────────────────────────────────
+            title_text = (
+                rf'$\lambda_{{az}}$ = {laz:.1f},  '
+                rf'$\lambda_{{el}}$ = {lel:.1f}'
+            )
+            subtitle_text = f'Stroke Consumption Ratio (SCR) Analysis'
+            fig.text(0.5, 0.96, title_text,
+                     ha='center', fontsize=18, fontweight='bold')
+            fig.text(0.5, 0.92, subtitle_text,
+                     ha='center', fontsize=13, style='italic', color='#555555')
+
+            # ── Build table data ───────────────────────────────────────
+            col_labels = [
+                r'$d_{{\max}}$',
+                'Viscous\nSCR Tip',
+                'Viscous\nSCR Tilt',
+                'Tustin\nSCR Tip',
+                'Tustin\nSCR Tilt',
+                'LuGre\nSCR Tip',
+                'LuGre\nSCR Tilt',
+            ]
+            cell_text = []
+            for r in grp_rows:
+                def _v(fm, key):
+                    try:
+                        val = float(r[f'{fm}_{key}'])
+                        return f'{val:.1f}%'
+                    except (KeyError, ValueError):
+                        return '—'
+
+                cell_text.append([
+                    format(float(r.get('d_max', 'nan')), '.3f'),
+                    _v('viscous', 'scr_rms_tip_pct'),
+                    _v('viscous', 'scr_rms_tilt_pct'),
+                    _v('tustin',  'scr_rms_tip_pct'),
+                    _v('tustin',  'scr_rms_tilt_pct'),
+                    _v('lugre',   'scr_rms_tip_pct'),
+                    _v('lugre',   'scr_rms_tilt_pct'),
+                ])
+
+            # ── Create matplotlib table ────────────────────────────────
+            col_widths = [0.12, 0.13, 0.13, 0.13, 0.13, 0.13, 0.13]
+            tbl = ax.table(
+                cellText=cell_text,
+                colLabels=col_labels,
+                colWidths=col_widths,
+                loc='center',
+                cellLoc='center',
+                bbox=[0.05, 0.15, 0.90, 0.75],
+            )
+            tbl.auto_set_font_size(False)
+            tbl.set_fontsize(11)
+            tbl.scale(1.0, 2.3)
+
+            # ── Style header and alternating rows ──────────────────────
+            header_colors = {
+                0: '#2d3e50',
+                1: FrictionColors.VISCOUS,  2: FrictionColors.VISCOUS,
+                3: FrictionColors.TUSTIN,   4: FrictionColors.TUSTIN,
+                5: FrictionColors.LUGRE,    6: FrictionColors.LUGRE,
+            }
+            for (row_i, col_i), cell in tbl.get_celld().items():
+                if row_i == 0:
+                    cell.set_facecolor(header_colors.get(col_i, '#2d3e50'))
+                    cell.set_text_props(color='white', fontweight='bold',
+                                        fontsize=11)
+                    cell.set_height(0.08)
+                else:
+                    if row_i % 2 == 0:
+                        cell.set_facecolor('#f5f5f5')
+                    else:
+                        cell.set_facecolor('#ffffff')
+                    cell.set_height(0.062)
+                cell.set_edgecolor('#cccccc')
+                cell.set_linewidth(0.8)
+
+            # ── Footer info ────────────────────────────────────────────
+            footer_text = (
+                f'Page {page_idx + 1} of {n_groups}  |  '
+                f'{len(grp_rows)} experiment(s)  |  '
+                'Generated by friction_controller_comparison.py'
+            )
+            fig.text(0.5, 0.03, footer_text,
+                     ha='center', fontsize=9, color='#888888',
+                     style='italic')
+
+            pdf.savefig(fig, bbox_inches='tight')
+            plt.close(fig)
+            page_num += 1
+
+    print(f"  [OK] {output_path.name}  ({n_groups} page(s), "
+          f"{sum(len(g) for g in groups.values())} experiment(s))")
+    return
+
+
 # =============================================================================
 # Simulation driver
 # =============================================================================
@@ -821,6 +966,10 @@ class FrictionComparisonPlotter:
                     ndob_log_path,
                     output_dir=ndob_history_dir,
                     save=self.save_figures,
+                )
+                print("[NDOB sweep] Building SCR summary table ...")
+                self._scr_table_fig = build_scr_tables_pdf(
+                    ndob_log_path,
                 )
             except Exception as exc:
                 print(f"[NDOB sweep] Skipped — {type(exc).__name__}: {exc}")
@@ -1688,7 +1837,7 @@ if __name__ == '__main__':
     # ------------------------------------------------------------------
     example_disturbance_config = {
         'wind': {
-            'enabled': True,
+            'enabled': False,
             'scale_length': 200.0,
             'turbulence_intensity': 0.25,
             'mean_velocity': 8.0,
