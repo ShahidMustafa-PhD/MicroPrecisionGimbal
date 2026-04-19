@@ -512,6 +512,191 @@ def build_scr_tables_pdf(
     return
 
 
+def build_tracking_error_bode_plots(
+    kp: Tuple[float, float],
+    kd: Tuple[float, float],
+    lambda_val: Tuple[float, float],
+    J: Tuple[float, float],
+    friction_params: Dict | None = None,
+    output_dir: Path | None = None,
+) -> Dict[str, plt.Figure]:
+    """Build Bode plots of tracking error transfer functions for three friction models.
+
+    Generates frequency-response plots for the tracking error transfer functions:
+
+    **Viscous:**
+        E_V(s) = (Δb·s) / (J(s+λ)(s²+K_d·s+K_p)) · Q̇(s)
+
+    **Tustin:**
+        E_T(s) = (Δk_T·s) / (J(s+λ)(s²+K_d·s+K_p)) · Q̇(s)
+
+    **LuGre:**
+        E_L(s) = (σ₀ + Δ_d·s) / (J(s+λ)(s²+K_d·s+K_p)) · Q̇(s)
+
+    All three models are plotted on the same pair of figures (magnitude and phase),
+    one pair per axis (azimuth and elevation), with linear magnitude [rad] on the
+    y-axis for direct comparison of tracking error magnitude.
+
+    Parameters
+    ----------
+    kp : tuple of (float, float)
+        (kp_az, kp_el) — proportional gains
+    kd : tuple of (float, float)
+        (kd_az, kd_el) — derivative gains
+    lambda_val : tuple of (float, float)
+        (lambda_az, lambda_el) — NDOB observer bandwidths [rad/s]
+    J : tuple of (float, float)
+        (J_az, J_el) — moments of inertia [kg⋅m²]
+    friction_params : dict, optional
+        Friction model parameters. Keys:
+          - 'delta_b_viscous': Δb for viscous model
+          - 'delta_k_tustin': Δk_T for Tustin model
+          - 'sigma_0_lugre': σ₀ for LuGre model
+          - 'delta_d_lugre': Δ_d for LuGre model
+        Defaults to nominal values if not provided.
+    output_dir : Path, optional
+        Directory to save PDFs. Defaults to ``NDOB_SWEEP_DIR / 'tracking_error_plots'``.
+
+    Returns
+    -------
+    dict
+        ``{'azimuth': Figure, 'elevation': Figure}`` — one figure per axis,
+        each showing all three friction models overlaid.
+    """
+    try:
+        import scipy.signal as sig
+    except ImportError:
+        print("[Tracking error plots] scipy not available — skipped.")
+        return {}
+
+    if output_dir is None:
+        output_dir = NDOB_SWEEP_DIR / 'tracking_error_plots'
+    output_dir = Path(output_dir)
+    if not output_dir.exists():
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+    # Default friction residual parameters if not provided
+    if friction_params is None:
+        friction_params = {
+            'delta_b_viscous': 0.01,      # Small viscous mismatch
+            'delta_k_tustin': 0.15,       # Larger Tustin slope mismatch
+            'sigma_0_lugre': 1.0e4,       # LuGre elasticity (stiffness)
+            'delta_d_lugre': -0.05,       # LuGre dissipative mismatch (negative)
+        }
+
+    figs = {}
+    axis_names = ['Azimuth', 'Elevation']
+    axis_keys = ['azimuth', 'elevation']
+
+    # Color scheme for friction models
+    color_viscous = '#1f77b4'  # Blue
+    color_tustin = '#ff7f0e'   # Orange
+    color_lugre = '#2ca02c'    # Green
+
+    for axis_idx, (axis_name, axis_key) in enumerate(zip(axis_names, axis_keys)):
+        kp_val = kp[axis_idx]
+        kd_val = kd[axis_idx]
+        lambda_ax = lambda_val[axis_idx]
+        J_val = J[axis_idx]
+
+        # Shared denominator for all three models: J(s + λ)(s² + K_d·s + K_p)
+        den_poly1 = [1, lambda_ax]  # (s + λ)
+        den_poly2 = [1, kd_val, kp_val]  # (s² + K_d·s + K_p)
+        den_poly = np.polymul(den_poly1, den_poly2)
+        den_base = [J_val * c for c in den_poly]
+
+        # Frequency range: 0.01 rad/s to 10000 rad/s
+        w = np.logspace(-2, 4, 2000)
+
+        # Compute frequency responses for all three models
+        models_data = {}
+
+        # ── VISCOUS: E_V(s) = (Δb·s) / denominator ─────────────────────
+        delta_b = friction_params['delta_b_viscous']
+        num_visc = [delta_b, 0]  # Δb·s
+        sys_visc = sig.TransferFunction(num_visc, den_base)
+        w_v, mag_v_db, phase_v = sig.bode(sys_visc, w)
+        mag_v = 10 ** (mag_v_db / 20.0)  # Convert dB to linear magnitude
+        models_data['viscous'] = (w_v, mag_v, phase_v, delta_b)
+
+        # ── TUSTIN: E_T(s) = (Δk_T·s) / denominator ──────────────────────
+        delta_k_tustin = friction_params['delta_k_tustin']
+        num_tus = [delta_k_tustin, 0]  # Δk_T·s
+        sys_tus = sig.TransferFunction(num_tus, den_base)
+        w_t, mag_t_db, phase_t = sig.bode(sys_tus, w)
+        mag_t = 10 ** (mag_t_db / 20.0)
+        models_data['tustin'] = (w_t, mag_t, phase_t, delta_k_tustin)
+
+        # ── LUGRE: E_L(s) = (σ₀ + Δ_d·s) / denominator ────────────────────
+        sigma_0 = friction_params['sigma_0_lugre']
+        delta_d = friction_params['delta_d_lugre']
+        num_lugre = [delta_d, sigma_0]  # Δ_d·s + σ₀
+        sys_lugre = sig.TransferFunction(num_lugre, den_base)
+        w_l, mag_l_db, phase_l = sig.bode(sys_lugre, w)
+        mag_l = 10 ** (mag_l_db / 20.0)
+        models_data['lugre'] = (w_l, mag_l, phase_l, (sigma_0, delta_d))
+
+        # ── Create figure with magnitude and phase subplots ──────────────
+        fig, (ax_mag, ax_ph) = plt.subplots(2, 1, figsize=(12.0, 9.0))
+
+        # Magnitude plot (linear scale, log-log axes)
+        ax_mag.loglog(w_v, mag_v, linewidth=2.8, color=color_viscous, alpha=0.85,
+                      label=rf'Viscous ($\Delta b = {delta_b:.4f}$ N·m·s/rad)')
+        ax_mag.loglog(w_t, mag_t, linewidth=2.8, color=color_tustin, alpha=0.85,
+                      label=rf'Tustin ($\Delta k_T = {delta_k_tustin:.4f}$ N·m·s/rad)')
+        ax_mag.loglog(w_l, mag_l, linewidth=2.8, color=color_lugre, alpha=0.85,
+                      label=rf'LuGre ($\sigma_0 = {sigma_0:.1e}$, $\Delta_d = {delta_d:.4f}$)')
+
+        ax_mag.grid(True, which='both', linestyle=':', alpha=0.4)
+        ax_mag.set_ylabel(r'Magnitude [rad] = $|E(j\omega)/\dot{Q}(j\omega)|$',
+                         fontsize=12, fontweight='bold')
+        ax_mag.set_title(
+            rf'Tracking Error Transfer Functions: {axis_name} Axis',
+            fontsize=15, fontweight='bold', pad=12,
+        )
+        ax_mag.legend(loc='best', fontsize=11, framealpha=0.95)
+
+        # Phase plot
+        ax_ph.semilogx(w_v, phase_v, linewidth=2.8, color=color_viscous, alpha=0.85)
+        ax_ph.semilogx(w_t, phase_t, linewidth=2.8, color=color_tustin, alpha=0.85)
+        ax_ph.semilogx(w_l, phase_l, linewidth=2.8, color=color_lugre, alpha=0.85)
+
+        ax_ph.grid(True, which='both', linestyle=':', alpha=0.4)
+        ax_ph.set_xlabel('Frequency [rad/s]', fontsize=12, fontweight='bold')
+        ax_ph.set_ylabel('Phase [deg]', fontsize=12, fontweight='bold')
+        ax_ph.axhline(-180, color='red', linestyle='--', linewidth=1, alpha=0.5)
+        ax_ph.axhline(-90, color='gray', linestyle='--', linewidth=1, alpha=0.4)
+        ax_ph.axhline(0, color='gray', linestyle='--', linewidth=1, alpha=0.4)
+
+        # Controller parameters annotation
+        omega_n = np.sqrt(kp_val)
+        zeta = kd_val / (2.0 * omega_n)
+        param_text = (
+            rf'$J = {J_val:.3f}$ kg⋅m²  |  '
+            rf'$\lambda = {lambda_ax:.1f}$ rad/s  |  '
+            rf'$\omega_n = {omega_n:.1f}$ rad/s  |  '
+            rf'$\zeta = {zeta:.3f}$'
+        )
+        fig.text(0.5, 0.50, param_text, ha='center', fontsize=11,
+                 bbox=dict(boxstyle='round', facecolor='#f9f9f9', alpha=0.9,
+                          edgecolor='#cccccc', linewidth=1))
+
+        fig.tight_layout(rect=[0, 0, 1, 0.47])
+
+        # Save as PDF
+        pdf_path = output_dir / f'tracking_error_{axis_key}.pdf'
+        try:
+            fig.savefig(str(pdf_path), format='pdf', dpi=300,
+                       bbox_inches='tight', facecolor='white')
+            print(f"  [OK] {pdf_path.name}")
+        except Exception as exc:
+            print(f"  [ERROR] Failed to save {pdf_path.name}: {exc}")
+
+        figs[axis_key] = fig
+
+    return figs
+
+
 # =============================================================================
 # Simulation driver
 # =============================================================================
@@ -579,8 +764,8 @@ def _build_config(
         environmental_disturbance_config=env_disturbance_cfg,
         # --- Feedback linearization inner-loop gains ---
         feedback_linearization_config={
-            'kp': [400.0, 800.0],
-            'kd': [40.0, 60.0],
+            'kp': [400.0, 400.0],
+            'kd': [40.0, 40.0],
             'ki': [50.0, 50.0],
             'enable_integral': False,
             'tau_max': [1.0, 0.7],
@@ -591,8 +776,8 @@ def _build_config(
         # --- NDOB (enabled, identical tuning for all runs) ---
         ndob_config={
             'enable': True,
-            'lambda_az': 110.0,
-            'lambda_el': 100.0,
+            'lambda_az': 400.0,
+            'lambda_el': 400.0,
             'd_max': 0.5,
         },
         dynamics_config={
@@ -828,6 +1013,30 @@ def run_friction_comparison(
         ndob_log_path=NDOB_SWEEP_LOG_PATH,
         ndob_history_dir=NDOB_SWEEP_PLOTS_DIR,
     )
+
+    # ── Generate tracking error Bode plots for three friction models ────────────
+    print("Generating tracking error frequency response plots ...")
+    try:
+        te_figs = build_tracking_error_bode_plots(
+            kp=(cfg.feedback_linearization_config['kp'][0],
+                cfg.feedback_linearization_config['kp'][1]),
+            kd=(cfg.feedback_linearization_config['kd'][0],
+                cfg.feedback_linearization_config['kd'][1]),
+            lambda_val=(cfg.ndob_config['lambda_az'],
+                       cfg.ndob_config['lambda_el']),
+            J=(0.0218,0.012),
+            friction_params={
+                'delta_b_viscous': 0.01,
+                'delta_k_tustin': 0.15,
+                'sigma_0_lugre': 1.0e4,
+                'delta_d_lugre': -0.05,
+            },
+            output_dir=NDOB_SWEEP_DIR / 'tracking_error_plots',
+        )
+        if te_figs:
+            print(f"[OK] Generated {len(te_figs)} tracking error plot(s)")
+    except Exception as exc:
+        print(f"[ERROR] Tracking error plots skipped: {exc}")
 
     return results
 
@@ -1837,7 +2046,7 @@ if __name__ == '__main__':
     # ------------------------------------------------------------------
     example_disturbance_config = {
         'wind': {
-            'enabled': False,
+            'enabled': True,
             'scale_length': 200.0,
             'turbulence_intensity': 0.25,
             'mean_velocity': 8.0,
