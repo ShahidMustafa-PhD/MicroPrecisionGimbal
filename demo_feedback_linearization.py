@@ -885,8 +885,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
 
     # Simple viscous friction parameters — used when friction_model == 'viscous' (or as fallback).
     viscous_cfg = {
-        'friction_az': 0.02,    # Azimuth viscous friction coefficient [N·m·s/rad]
-        'friction_el': 0.015,    # Elevation viscous friction coefficient [N·m·s/rad]
+        'friction_az': 0.1,    # Azimuth viscous friction coefficient [N·m·s/rad]
+        'friction_el': 0.075,    # Elevation viscous friction coefficient [N·m·s/rad]
     }
 
     if use_lugre:
@@ -918,8 +918,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
     print("-" * 80)
     
     config_pid = SimulationConfig(
-        dt_sim=0.0001,
-        dt_coarse=0.01,
+        dt_sim=0.0005,
+        dt_coarse=0.0005,
         dt_fine=0.00001,
         dt_qpd=0.00001,
         log_period=0.001,
@@ -949,18 +949,30 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
             'cm_h': 0.0,
             'gravity': 9.81
         },
-           coarse_controller_config={
+           #coarse_controller_config={
             # Corrected gains from double-integrator design (FIXED derivative calculation)
             # These gains are now correct after fixing the derivative term bug
-            'kp': [3.514, 1.320],    # Per-axis: [Pan, Tilt]
-            'ki': [15.464, 4.148],   # Designed for 5 Hz bandwidth
-            'kd': [0.293, 0.059418],  # Corrected Kd values (40% higher than before)
-            'tau_max': [1.0, 0.7],
-            'tau_min': [-1.0, -0.7],
-            'anti_windup_gain': 1.0,
-            'tau_rate_limit': 50.0,
-            'enable_derivative': True  # Now works correctly with fixed implementation
-        }
+           # 'kp': [3.514, 1.320],    # Per-axis: [Pan, Tilt]
+           # 'ki': [15.464, 4.148],   # Designed for 5 Hz bandwidth
+           # 'kd': [0.293, 0.059418],  # Corrected Kd values (40% higher than before)
+            #'tau_max': [1.0, 0.7],
+            #'tau_min': [-1.0, -0.7],
+            #'anti_windup_gain': 1.0,
+            #'tau_rate_limit': 50.0,
+            #'enable_derivative': True  # Now works correctly with fixed implementation
+       # }
+
+    coarse_controller_config = {
+    'kp': [3.840, 2.104],
+    'ki': [8.864, 4.857],
+    'kd': [0.416, 0.228],
+    'tau_max': [1.0, 0.7],
+    'tau_min': [-1.0, -0.7],
+    'anti_windup_gain': 4.617,
+    'tau_rate_limit': 50.0
+    #'enable_derivative': True  # Now works correctly with fixed implementation
+    }
+
     )
     
     runner_pid = DigitalTwinRunner(config_pid)
@@ -975,10 +987,10 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
     print("-" * 80)
     
     config_fl = SimulationConfig(
-        dt_sim=0.0001,
-        dt_coarse=0.01,
-        dt_fine=0.00001,
-        dt_qpd=0.00001,
+        dt_sim=0.0005,
+        dt_coarse=0.0005,
+        dt_fine=0.0001,
+        dt_qpd=0.0001,
         log_period=0.001,
         seed=42,
         target_az=np.deg2rad(target_az_deg),
@@ -1012,12 +1024,12 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
             # Design for ωn = 20 rad/s (3.2 Hz), ζ = 1.0 (critically damped)
             # Kp = ωn² = 400, Kd = 2*ζ*ωn = 40
             # With friction feedforward for best baseline performance
-            'kp': [400.0, 800.0],    # Position gain [1/s²]
-            'kd': [40.0, 60.0],      # Velocity gain [1/s] - critically damped
+            'kp': [400.0, 400.0],    # Position gain [1/s²]
+            'kd': [35.0, 35.0],      # Velocity gain [1/s] - critically damped
             'ki': [50.0, 50.0],      # Integral for residual disturbances
             'enable_integral': False,  # ENABLE for steady-state performance
-            'tau_max': [1.0, 1.0],
-            'tau_min': [-1.0, -1.0],
+            'tau_max': [0.7, 0.50],
+            'tau_min': [-0.7, -0.5],
             # NOTE: conditional_friction defaults to True, which is REQUIRED
             'conditional_friction':True,
             # tustin friction is handled by top-level config now
@@ -1032,8 +1044,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
         # Enable this to estimate and compensate unmodeled disturbances (friction, etc.)
         ndob_config={
             'enable': False,  # Set True to enable NDOB disturbance compensation
-            'lambda_az': 35.0,  # Observer bandwidth Az [rad/s] (τ = 25ms)
-            'lambda_el': 40.0,  # Observer bandwidth El [rad/s]
+            'lambda_az': 150.0,  # Observer bandwidth Az [rad/s] (τ = 25ms)
+            'lambda_el': 150.0,  # Observer bandwidth El [rad/s]
             'd_max': 5.0        # Max disturbance estimate [N·m] (safety limit)
         },
         dynamics_config={
@@ -1095,8 +1107,8 @@ def run_three_way_comparison(signal_type='constant', disturbance_config=None,
         # PRODUCTION RECOMMENDATION: Use NDOB at moderate bandwidth (50-100 rad/s)
         # combined with friction feedforward (conditional_friction=True) for
         # optimal performance.
-        'lambda_az':50.0,   # Moderate bandwidth (avoids instability at >200)
-        'lambda_el': 35.0,   # Same for both axes
+        'lambda_az':100.0,   # Moderate bandwidth (avoids instability at >200)
+        'lambda_el': 100.0,   # Same for both axes
         'd_max': 0.5         # Allow reasonable estimates
     }
     # KEEP friction feedforward ENABLED with NDOB!
@@ -1219,7 +1231,7 @@ if __name__ == '__main__':
     #              Reveals quadrant-glitch torque spikes at velocity reversals.
     #              Shows how much NDOB degrades when the friction model has memory.
     #
-    FRICTION_MODEL = 'tustin'   # <-- CHANGE THIS: 'tustin' or 'lugre' or 'viscous'
+    FRICTION_MODEL = 'viscous'   # <-- CHANGE THIS: 'tustin' or 'lugre' or 'viscous'
 
     # Available signal types: 'constant', 'square', 'sine', 'cosine', 'hybridsig'
 
